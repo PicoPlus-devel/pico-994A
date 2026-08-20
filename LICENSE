@@ -1,0 +1,64 @@
+pico-994A
+=========
+
+This project combines code under several licences. All of them must be preserved.
+
+-------------------------------------------------------------------------------
+TI-99/4A emulation core (ti99/, except where noted below)
+-------------------------------------------------------------------------------
+Ported from DS99/4a (DS994a), Copyright (c) 2023-2026 Dave Bernazzani
+(wavemotion-dave) - https://github.com/wavemotion-dave/DS994a
+
+  "For the rest of the code: as long as there is no commercial use (i.e. no
+   profit is made), copying and distribution of this emulator, its source code
+   and associated readme files, with or without modification, are permitted in
+   any medium without royalty provided this copyright notice is used and
+   wavemotion-dave is thanked profusely.
+
+   The DS99 emulator is offered as-is, without any warranty."
+
+Thanks profusely, Dave.
+
+DS994a is itself built from several sources, whose terms carry through:
+
+  * TMS9918A video driver - from ColEM by Marat Fayzullin. Retains Marat's
+    original copyright statement. Do not reuse that code without trying to
+    contact Marat.
+
+  * TMS9900 CPU core - substantially wavemotion-dave's own work, with
+    significant scaffolding from Classic99 by Mike Brent (Tursi), used with
+    permission. Please adhere to Mike Brent's copyright wishes for any code
+    duplicated from Classic99.
+
+  * Disk controller handling - partly from Classic99, likewise with permission.
+
+-------------------------------------------------------------------------------
+ti99/rpk/lowzip.c, lowzip.h  and  ti99/rpk/yxml.c, yxml.h
+-------------------------------------------------------------------------------
+MIT licensed. See ti99/rpk/LICENSE-lowzip.txt and ti99/rpk/LICENSE-yxml.txt.
+
+-------------------------------------------------------------------------------
+ti99/cpu/sn76496/sn76496.c, sn76496.h
+-------------------------------------------------------------------------------
+The SN76489/SN76496 PSG core taken unmodified (apart from making three constants
+overridable) from pico-smsplus, which carries the SMS Plus lineage by Charles
+MacDonald and is distributed under the GNU General Public License.
+
+-------------------------------------------------------------------------------
+Port glue, front end and build system (main.cpp, splash.cpp, ti99/ti99_*.c/h,
+CMakeLists.txt, scripts)
+-------------------------------------------------------------------------------
+Copyright (c) 2026 Frank Hoedemakers. Same terms as the rest of the emulator
+family (pico-infonesPlus and friends).
+
+-------------------------------------------------------------------------------
+Submodules
+-------------------------------------------------------------------------------
+pico_shared, pico_lib and tusb_xinput carry their own licences; see each repo.
+
+-------------------------------------------------------------------------------
+NOTE ON COMMERCIAL USE
+-------------------------------------------------------------------------------
+Because the emulation core is used under a non-commercial licence, this project
+as a whole may not be sold or used to make a profit. This is a stricter
+condition than the GPL cores used in the sibling emulators in this family.

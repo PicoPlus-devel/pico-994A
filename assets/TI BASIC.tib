@@ -1,0 +1,5 @@
+pico-994A: selecting this file boots the console with no cartridge inserted,
+which is where TI BASIC lives (press 1 at the master title screen).
+
+Copy it to your /roms/TI99 folder on the SD card. The emulator also creates
+it automatically on first run if the folder exists.
