@@ -89,17 +89,65 @@ Cartridge ROM up to 64 KB is held in SRAM; anything larger needs a board with PS
 
 `tools/mkrpk.py` packs the `.bin` sets into Rom PacKs, working out the PCB type from the
 naming convention and the file sizes. It needs nothing but Python 3, and the layout it
-writes is the one MAME reads:
+writes is the one MAME reads.
+
+Point it at a single part and it collects the rest of that set:
 
 ```
-tools/mkrpk.py PARSECC.bin      # -> PARSEC.rpk, with PARSECG.bin picked up alongside
-tools/mkrpk.py -d out roms/     # every set in a folder, one .rpk each
+$ tools/mkrpk.py PARSECC.bin
+PARSEC.rpk  pcb=standard  rom=PARSECC.bin 8K grom=PARSECG.bin 24K
 ```
 
-`--pcb` forces the type for the carts that need one - `minimem`, `mbx`, `super`,
-`pagedcru` and the rest are listed by `--list-pcb`. `--rom`, `--rom2` and `--grom` fill
-the sockets directly when the files are not named to the convention. `-n` says what it
-would build without writing anything, and `-v` prints the `layout.xml` it generated.
+Or convert a whole folder at once, one `.rpk` per cartridge:
+
+```
+$ ls roms
+ALPINERC.bin  ALPINERG.bin  MMC.bin  MMG.bin  MUNCHMNC.bin  MUNCHMNG.bin
+XBC.bin  XBD.bin  XBG.bin
+
+$ tools/mkrpk.py -d rpk roms
+rpk/ALPINER.rpk  pcb=standard  rom=ALPINERC.bin 8K grom=ALPINERG.bin 24K
+rpk/MM.rpk  pcb=standard  rom=MMC.bin 8K grom=MMG.bin 12K
+rpk/MUNCHMN.rpk  pcb=standard  rom=MUNCHMNC.bin 8K grom=MUNCHMNG.bin 18K
+rpk/XB.rpk  pcb=paged12k  rom=XBC.bin 4K rom2=XBD.bin 8K grom=XBG.bin 30K
+```
+
+Extended BASIC came out as `paged12k` because its ROM is 4 KB with a second 8 KB bank
+behind it. `-v` shows the layout that went into the archive:
+
+```
+$ tools/mkrpk.py -v -f -d rpk roms/XBC.bin
+rpk/XB.rpk  pcb=paged12k  rom=XBC.bin 4K rom2=XBD.bin 8K grom=XBG.bin 30K
+    | <?xml version="1.0" encoding="utf-8"?>
+    | <romset listname="xb">
+    |     <resources>
+    |         <rom id="romimage" file="XBC.bin"/>
+    |         <rom id="romimage2" file="XBD.bin"/>
+    |         <rom id="gromimage" file="XBG.bin"/>
+    |     </resources>
+    |     <configuration>
+    |         <pcb type="paged12k">
+    |             <socket id="rom_socket" uses="romimage"/>
+    |             <socket id="rom2_socket" uses="romimage2"/>
+    |             <socket id="grom_socket" uses="gromimage"/>
+    |         </pcb>
+    |     </configuration>
+    | </romset>
+```
+
+The filenames cannot say everything. Mini Memory is an ordinary ROM + GROM set on disk,
+so it converted as `standard`, but the real cartridge carries 4 KB of battery-backed RAM.
+`--pcb` sets what the files cannot:
+
+```
+$ tools/mkrpk.py --pcb minimem --listname minimem -f -o rpk/MM.rpk roms/MMC.bin
+rpk/MM.rpk  pcb=minimem  rom=MMC.bin 8K grom=MMG.bin 12K
+```
+
+`--list-pcb` prints every type the loader understands - `mbx`, `super`, `pagedcru`,
+`paged7` and the rest. `--rom`, `--rom2` and `--grom` fill the sockets directly when the
+files are not named to the convention, and `-n` says what would be built without writing
+anything.
 
 ## TI BASIC
 

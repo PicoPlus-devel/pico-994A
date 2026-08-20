@@ -85,6 +85,16 @@ def banks(size):
     return size // BANK + (1 if size % BANK else 0)
 
 
+# MAME list names are lowercase alphanumerics, and rpk.c matches a handful of them
+# ("qbert", "frogger") to set up a cart's controls - so keep the default in that shape.
+LISTNAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+
+
+def slug(name):
+    """'Mini Memory' -> 'minimemory'. Falls back to 'cart' if nothing is left."""
+    return "".join(c for c in name.lower() if c in LISTNAME_CHARS) or "cart"
+
+
 # -------------------------------------------------------------------------------------
 # Working out what a file is. "PARSECC.bin" is the 'C' part of the set "PARSEC";
 # "TUNNELS.bin" ends in a character that is not a part letter, so it is a single image.
@@ -251,6 +261,8 @@ def build_layout(listname, pcb, names, ram):
 def check_layout(layout, listname, names):
     if len(listname) > MAX_ATTR:
         die("listname '%s' is longer than %d characters" % (listname, MAX_ATTR))
+    if not listname.isascii():
+        die("listname '%s' is not plain ASCII" % listname)
     for name in names.values():
         if len(name) > MAX_ATTR:
             die("'%s' is longer than %d characters - rename it" % (name, MAX_ATTR))
@@ -339,7 +351,8 @@ def main():
     ap.add_argument("--grom", type=Path, help="image for grom_socket (GROM >6000)")
     ap.add_argument("--pcb", choices=sorted(PCB_TYPES), help="force the PCB type")
     ap.add_argument("--listname", help="romset listname - some carts are keyed off it "
-                                      "for controller mapping (default: output name)")
+                                      "for controller mapping (default: the output "
+                                      "name, slugified)")
     ap.add_argument("-o", "--output", type=Path, help="output .rpk (single cartridge)")
     ap.add_argument("-d", "--outdir", type=Path,
                     help="write into this folder (default: next to the source)")
@@ -394,7 +407,7 @@ def main():
             out = (args.outdir or source.parent) / ("%s.rpk" % (base if part else source.stem))
         elif args.outdir:
             out = args.outdir / out.name
-        make_rpk(roles, pcb, out, args.listname or out.stem.lower(), args)
+        make_rpk(roles, pcb, out, args.listname or slug(out.stem), args)
         return 0
 
     # ---------------------------------------------------------------------------
@@ -424,7 +437,7 @@ def main():
         if args.pcb:
             pcb = args.pcb
         out = args.output or (args.outdir or folder) / ("%s.rpk" % base)
-        make_rpk(roles, pcb, out, args.listname or out.stem.lower(), args)
+        make_rpk(roles, pcb, out, args.listname or slug(out.stem), args)
 
     return 0
 
