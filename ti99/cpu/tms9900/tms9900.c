@@ -541,7 +541,11 @@ void TMS9900_Reset(void)
     // ---------------------------------------------------------
     // Now setup for all the CART and Console roms ...
     // ---------------------------------------------------------
-    memset(MemCART,         0xFF,(512*1024));       // The cart is not inserted to start... We map larger than this, but don't waste time clearing more than 512K
+    // Upstream clears a fixed 512K here because the DS allocates the cart buffer once,
+    // up front. In this port MemCART is sized to the cartridge and is not allocated at
+    // all until after this reset runs, so clear exactly what exists - which on the way
+    // in to a new game is nothing.
+    if (MemCART) memset(MemCART, 0xFF, MAX_CART_SIZE);
     memset(MemCPU,          0xFF, 0x10000);         // Set all of memory to 0xFF (nothing mapped until proven otherwise)
     memset(MemGROM,         0xFF, 0x10000);         // Set all of GROM memory to 0xFF (nothing mapped until proven otherwise)
 

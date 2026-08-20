@@ -274,6 +274,11 @@ cd pico-994A
 
 ***
 
+## Known issues
+
+- **No speech in Parsec.** The synthesiser passes its own test harness, so the fault is
+  most likely in how the chip is driven rather than in the LPC code. Under investigation.
+
 ## Not yet done
 
 - **Cassette (CS1/CS2).** Feasible - the console DSR bit-bangs the TMS9901 (CRU bits

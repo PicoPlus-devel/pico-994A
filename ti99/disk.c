@@ -346,6 +346,13 @@ static bool WriteSector(u8 drive, u16 sector, u8 *buf)
     u16 sectorNumber = (MemCPU[0x834A]<<8) | MemCPU[0x834B];
     u16 destVDP      = (MemCPU[0x834E]<<8) | MemCPU[0x834F];
 
+    // The VDP address bus is 14 bits, so the transfer window has to be masked into the
+    // 16K of video RAM. Upstream gets away without this because its pVDPVidMem sits in
+    // a 4MB address space where an overrun is harmless; here it is a 16K heap block and
+    // a sector transfer near the top would write over whatever follows it.
+    destVDP &= 0x3FFF;
+    if (destVDP > (0x4000 - 256)) destVDP = 0x4000 - 256;
+
     if ((drive == 1) || (drive == 2) || (drive == 3))
     {
         drive = drive-1;    // Zero based for struct array lookup

@@ -11,6 +11,7 @@
 // =====================================================================================
 #include "ti99_compat.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include "ti99_fileio.h"
@@ -509,7 +510,14 @@ u8 rpk_load_paged7(void)
 
     if (!err)
     {
-        u8 *swapArea = (u8*)(MemCART + 0x10000);            // Just need 32K somewhere convienent
+        // Upstream scribbles the 32K working copy at MemCART+0x10000, free space inside
+        // the DS's fixed 512K cart buffer. Here MemCART is sized to the cartridge, so
+        // that offset is past the end of the allocation - take a real scratch buffer
+        // instead, and make sure the finished 32K image has somewhere to land.
+        if (MAX_CART_SIZE < 0x8000) return 1;
+
+        u8 *swapArea = (u8 *)malloc(0x8000);
+        if (!swapArea) return 1;
 
         memcpy(swapArea+0x0000, MemCART+0x0000, 0x1000);    // Build ROM0 + ROM0
         memcpy(swapArea+0x1000, MemCART+0x0000, 0x1000);
@@ -525,6 +533,8 @@ u8 rpk_load_paged7(void)
 
         memcpy(MemCPU+0x6000,  swapArea, 0x2000);           // Bank 0 + Bank 0
         memcpy(MemCART+0x0000, swapArea, 0x8000);           // The new 32K ROM with all the banks in place
+
+        free(swapArea);
 
         tms9900.bankMask = 0x0003;                          // We have 4 banks.
     }

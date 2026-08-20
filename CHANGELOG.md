@@ -100,6 +100,22 @@ Two things the test harness caught that would have been silent failures on hardw
   on the falling edge of buffer-low, once enough bytes have arrived. Starting immediately
   meant the first frame was parsed from an empty FIFO and read as a stop frame.
 
+### Fixed after first hardware test
+- **Hardfault booting TI BASIC.** `TMS9900_Reset()` cleared a fixed 512 KB of `MemCART`,
+  which is what the DS allocates up front. Here the cart buffer is sized to the
+  cartridge and is not allocated until *after* the reset runs, so this was a 512 KB
+  write through a null pointer. Now clears exactly what exists, which on the way into a
+  new game is nothing.
+- **`rpk_load_paged7` scribbled 32 KB past the cart buffer.** It used `MemCART+0x10000`
+  as scratch - free space inside the DS's fixed buffer, well past the end of ours. Uses
+  a real scratch allocation and checks the image will fit before building it.
+- **Disk sector transfers could write outside video RAM.** The DSR's VDP buffer address
+  was used unmasked, but the VDP address bus is 14 bits; a transfer near the top of the
+  range ran off the end of the 16 KB heap block. Masked and clamped to the window.
+
+`pcode.c` reads `MemCART[0x10000 + ...]` on the same assumption, but the p-code card is
+never enabled in this port so that path is unreachable.
+
 ### Menu
 - Allowed-extension lists in `pico_shared`'s RomLister are **space** separated, not
   comma separated (`RomLister::IsextensionAllowed` splits on `' '`). The first build
