@@ -244,6 +244,26 @@ written.
 Loading runs at real tape speed, because the console is timing the bits as they arrive.
 A short BASIC program takes a few seconds; a long one takes as long as it did in 1981.
 
+### Making a tape from a program file
+
+`tools/mktape.py` writes a tape from a V9T9 FIAD, a TIFILES file, or a raw program image -
+whatever the console would have written had you typed `SAVE CS1`:
+
+```
+$ tools/mktape.py A13
+A13.wav
+  from A13 (FIAD), 640 byte image, 10 records
+  2251 bytes on tape, 13.8s at 44100 Hz
+```
+
+Useful for getting a program that only exists as a disk file onto tape, and for Extended
+BASIC, where no cassette dumps seem to be published at all.
+
+The format was read off tapes the hardware wrote and checked against the matching FIAD
+files, not guessed: 768 bytes of `>00`, `>FF`, the record count twice, then each 64-byte
+record written out twice with a checksum. Tapes it produces come back byte-identical to
+the originals, which is the check that it is right.
+
 ### Looking inside a tape
 
 `tools/tapeinfo.py` says what is actually on a tape - transitions, interval lengths, the
