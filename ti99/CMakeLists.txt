@@ -23,6 +23,7 @@ target_sources(ti99core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/speech.c
     ${CMAKE_CURRENT_SOURCE_DIR}/disk.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pcode.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/cassette.c
     # --- Cartridge loading -----------------------------------------------------
     ${CMAKE_CURRENT_SOURCE_DIR}/rpk/rpk.c
     ${CMAKE_CURRENT_SOURCE_DIR}/rpk/lowzip.c

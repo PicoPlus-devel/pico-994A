@@ -52,6 +52,18 @@ extern u8   SpeechIsTalking(void);
 // Produce one sample at the chip's native 8kHz rate, roughly -8192..8191.
 extern s16  SpeechGetSample(void);
 
+// --- diagnostics ----------------------------------------------------------------------
+// Built in with -DTI99_SPEECH_TRACE. The chip has a lot of ways to stay silent that all
+// look identical from the speaker, so this counts what the CPU actually does to it -
+// commands issued, bytes queued, whether talking ever started, whether the FIFO ran dry -
+// and prints a summary line only when something changed. Printing per access would flood
+// the port and wreck the frame timing, which is why it is counters and not a log.
+#ifdef TI99_SPEECH_TRACE
+extern void SpeechTraceTick(void);      // call once per emulated frame
+#else
+#define SpeechTraceTick() ((void)0)
+#endif
+
 #ifdef __cplusplus
 }
 #endif

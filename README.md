@@ -35,12 +35,14 @@ This project is part of a family of Raspberry Pi Pico emulator projects:
 - **Cartridges from SD card** - `.rpk` Rom PacKs and the classic C/D/G/8/9/0 `.bin` sets.
 - **TI BASIC** - built into the console GROMs; see [TI BASIC](#ti-basic) below.
 - **Disk controller** - DSK1, DSK2 and DSK3 against `.DSK` sector images, read and write.
+  Needs a board with PSRAM (see [Memory](#memory)).
 - **SAMS memory expansion** - 1 MB to 8 MB on boards with PSRAM fitted.
 - **Speech Synthesizer** - real LPC synthesis of the TMS5200, not sampled playback.
   See [Speech](#speech) below.
+- **Cassette (CS1/CS2)** - `SAVE CS1` and `OLD CS1` against `.wav` or `.cas` files, and
+  real cassette dumps load unchanged. See [Cassette](#cassette) below.
 
-Not emulated yet: cassette (CS1/CS2), save states, and the p-code card.
-See [Not yet done](#not-yet-done).
+Not emulated yet: save states and the p-code card. See [Not yet done](#not-yet-done).
 
 ***
 
@@ -180,6 +182,118 @@ OLD DSK1.MYPROG
 Sector writes go straight to the card rather than being buffered and written back on
 exit, so pulling the power will not lose a program you just saved.
 
+## Cassette
+
+The cassette port works, in both directions:
+
+```
+SAVE CS1
+OLD CS1
+```
+
+Tapes live in `/saves/ti99/tapes/` and the deck is in the settings menu (SELECT + START):
+
+| Setting | What it does |
+|---------|--------------|
+| `Cassette: Empty` | nothing loaded |
+| `Cassette: Play <name>` | that tape is in the deck, wound to the start |
+| `Cassette: Record WAV` | record a new tape as a `.wav` |
+| `Cassette: Record CAS` | record a new tape as a `.cas` |
+| `Cassette: Rewind` | wind the loaded tape back (offered while one is playing) |
+
+LEFT/RIGHT pick, `A` commits - nothing is opened or created until you press `A`. Use it to
+choose `.cas` instead of `.wav`, to rewind for a second read, or to eject.
+
+You do not have to visit that menu first, though - the deck follows the console:
+
+```
+SAVE CS1
+* PRESS CASSETTE RECORD CS1
+  THEN PRESS ENTER          <- press ENTER, and the emulator asks you to label the tape
+* CHECK TAPE (Y OR N)? Y
+* REWIND CASSETTE TAPE CS1
+  THEN PRESS ENTER          <- just press ENTER; the tape rewinds itself
+* PRESS CASSETTE PLAY CS1
+  THEN PRESS ENTER          <- and turns itself round to read back
+* DATA OK
+```
+
+**`SAVE CS1` has no filename.** The TI cassette device takes only a device name: a tape
+has no directory, so the console just streams to wherever the tape happens to be sitting,
+and nothing in the data carries a name. On a real console you wrote it on the label with a
+pen. So the emulator asks for one at the moment the console asks for the tape - which is
+the moment you would have been reaching for a cassette anyway. It defaults to `TAPE-01`,
+ENTER accepts it, and overwriting an existing tape has to be confirmed. With no USB
+keyboard attached the default is used as-is.
+
+`OLD CS1` with an empty deck likewise offers the tapes on the card to pick from, and a
+tape already in the deck is wound back at the start of every load - the console has just
+asked for that, and on a real deck you would have done it by hand.
+
+The tape is audible while it runs, as it is on a real console - during a load the DSR
+opens the audio gate, and during a save the screech is the only sign anything is being
+written.
+
+### Tape formats
+
+| | |
+|---|---|
+| `.wav` | The interoperable one. Any rate, mono or stereo, 8/16/24/32-bit integer or 32-bit float, so **real cassette dumps load unchanged** - they are usually 32-bit float at 48 kHz - and a tape you record opens in Audacity. Written as 44.1 kHz 8-bit mono, about 44 KB per second of tape. |
+| `.cas` | The compact one - one bit per tape cell, roughly 170 bytes per second. Carries the bit rate the console actually recorded at in a small header, so playback matches the machine rather than an assumed baud rate. |
+
+Loading runs at real tape speed, because the console is timing the bits as they arrive.
+A short BASIC program takes a few seconds; a long one takes as long as it did in 1981.
+
+### Looking inside a tape
+
+`tools/tapeinfo.py` says what is actually on a tape - transitions, interval lengths, the
+bit rate they imply, and whether it decodes as the console's encoding. Useful on a tape
+pico-994A wrote, and for comparing against a dump of a real cassette:
+
+```
+$ tools/tapeinfo.py /media/sdcard/saves/ti99/tapes/FRANK.WAV
+  44100 Hz, 8-bit, mono, 246582 frames (5.59s)
+  7684 transitions
+  short: 2048 averaging 362.2us
+  long:  5636 averaging 725.3us
+  long/short ratio 2.00  (bi-phase mark wants 2.00)
+  => cell 768.0us, 1302.0 baud, 2304 CPU cycles per cell
+  leading >00 run: 768 bytes  (a real leader is 768)
+  >FF marker at byte 768
+```
+
+A healthy tape opens with a long run of `>00` and then a `>FF` marker. `0 transitions`
+means the data line never moved and nothing was recorded; one interval length means a
+tone rather than data.
+
+### Sample tapes
+
+`assets/tapes/` holds three TI BASIC programs dumped from a real cassette. Copy them to
+`/saves/ti99/tapes/` and load one with `OLD CS1` - `13 Bouncing Ball 1.wav` is the
+shortest at 13 seconds. See the README in that folder for provenance.
+
+### Where to find more
+
+Dumps of physical cassettes are worth testing against, since they carry the DC offset and
+speed variation a tape written by the emulator does not:
+
+- [ftp.whtech.com/Cassettes/](http://ftp.whtech.com/Cassettes/) - the WHTech archive, with
+  `Adventure/`, `Mini_Memory/`, `Tunnels_Of_Doom/` and `Oldies_But_Goodies/` subfolders.
+- [github.com/sonic2000gr/TI99](https://github.com/sonic2000gr/TI99) - one person's tapes
+  from 1984-87, BASIC on side A and Extended BASIC on side B, BSD-2-Clause.
+- [TOSEC TI-99/4A on archive.org](https://archive.org/details/Texas_Instruments_TI-99_4a_TOSEC_2012_04_23)
+  and the [AtariAge TI-99/4A forum](https://forums.atariage.com/topic/247784-good-source-for-downloading-cassette-programs/).
+
+Copy one into `/saves/ti99/tapes/` and load it with `OLD CS1`. Names longer than 24
+characters are skipped rather than truncated, so rename anything long.
+
+`make -C tools/tapetest run` exercises the encode/decode path, the 9901 timer and the CRU
+decode on the host, without hardware. Point it at a dump to include that too:
+
+```
+TAPETEST_REAL=/path/to/dump.wav make -C tools/tapetest run
+```
+
 ## Speech
 
 The Solid State Speech Synthesizer is emulated properly - the TMS5200's LPC-10 vocal
@@ -196,6 +310,19 @@ Moonmine, Star Trek and the rest talk with no additional files at all.
 TMS6100 ROMs. That is what TI Extended BASIC's `CALL SAY` and the Terminal Emulator II
 read from. Without it, those fall silent while cartridge speech keeps working. The file
 is only loaded when present, so it costs nothing if you leave it out.
+
+The LPC bitstream is read **least significant bit first within each byte** - the order
+the TMS6100 shifts its serial data out, and the order cartridge speech data is stored in.
+Fields are then assembled most significant bit first out of that stream, so each byte is
+effectively read back to front. Getting this backwards does not fail loudly: the fields
+land on the wrong bits, the stream drifts, and eventually a 4-bit energy field reads as
+15 - a stop frame - and the phrase cuts off partway through. That was the cause of the
+"no speech in Parsec" bug; all 22 of Parsec's phrases now decode to exactly their
+declared byte count and end on a real stop frame.
+
+Output level is set so a loud phrase peaks at about 10700, which is where one PSG channel
+at full volume sits, so speech carries over the game without the mixer clipping when both
+are busy.
 
 Early TI-99/4A modules used the **TMS5200** (TMC0285 / CD2501E) and later ones the
 TMS5220; their pitch and reflection-coefficient tables differ audibly. The port defaults
@@ -232,10 +359,17 @@ as on the original keyboard.
 |-------|--------|
 | D-pad / stick | Joystick 1 (player 2's pad drives Joystick 2) |
 | A or B | Fire |
-| SELECT + START | Settings menu |
+| SELECT | Types **1** - picks the first option on a cartridge's title screen |
+| START | Types **2** - picks the second |
+| SELECT + START | Settings menu (cassette lives here) |
 | SELECT + UP/DOWN | Screen mode |
 | START + A | Toggle FPS display |
 | SELECT + START + UP + A | Reboot into BOOTSEL mode |
+
+Nearly every cartridge opens on the master title screen asking for a number, so SELECT and
+START are mapped to **1** and **2**. That is enough to start most games without a keyboard
+attached. Neither types anything while it is being held as part of one of the combinations
+above, so opening the settings menu does not put a 1 into the running game.
 
 ***
 
@@ -259,6 +393,29 @@ Built for every RP2350 configuration `pico_shared` supports:
 
 HW_CONFIG 3 and 4 are RP2040-only boards; 11 is a deprecated pinout.
 
+## Memory
+
+The RP2350 has 512 KB of SRAM and the framework's framebuffer already takes 150 KB of it,
+so where each buffer lives is a deliberate choice rather than an accident.
+
+**PSRAM where the board has it, SRAM otherwise.** The machine's two 64 KB address spaces -
+CPU and GROM - are the largest thing it needs, so they move to PSRAM on boards that have
+it and give back 128 KB of SRAM. Boards without PSRAM fall back to SRAM and run exactly as
+before; nothing is excluded.
+
+**SRAM always.** Video RAM (16 KB) stays put: the VDP walks it for every scanline it
+renders, and 16 KB is not worth the latency. Cartridges up to 64 KB stay in SRAM too -
+every fetch from `>6000` goes through them.
+
+**PSRAM only, feature off without it.** The disk controller DSR (8 KB), the speech
+vocabulary ROM (32 KB), Super Cart RAM (32 KB), SAMS memory, and cartridges over 64 KB.
+
+The reason for deciding all of this up front rather than at the point of allocation: the
+SDK's `malloc` **panics** instead of returning NULL, so "try SRAM, fall back to PSRAM"
+cannot work - the fallback is unreachable and the board resets instead. Every allocation
+is therefore sized against a known budget, and anything that might not fit is either
+gated on PSRAM or routed to it.
+
 ## Building
 
 ```
@@ -276,15 +433,12 @@ cd pico-994A
 
 ## Known issues
 
-- **No speech in Parsec.** The synthesiser passes its own test harness, so the fault is
-  most likely in how the chip is driven rather than in the LPC code. Under investigation.
+- **`CALL SAY` / resident vocabulary is unverified.** The vocabulary ROM read path shares
+  the bit-order fix described under [Speech](#speech), but only cartridge speech has been
+  checked against real data so far.
 
 ## Not yet done
 
-- **Cassette (CS1/CS2).** Feasible - the console DSR bit-bangs the TMS9901 (CRU bits
-  22/23 motor, 24 audio gate, 25 out, 27 in) at ~1379 baud, and the 9901 timer it times
-  against is already emulated. It is new code rather than a port; DS994a does not
-  implement it either. Use a disk for now.
 - **Save states.**
 - **p-code card.**
 

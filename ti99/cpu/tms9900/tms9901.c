@@ -22,6 +22,7 @@
 #include "../../disk.h"
 #include "../../pcode.h"
 #include "../../SAMS.h"
+#include "../../cassette.h"
 
 // From https://www.unige.ch/medecine/nouspikel/ti99/tms9901.htm
 //
@@ -67,9 +68,24 @@ const u8 TIKeys[8][8] =
 };
 
 // ---------------------------------------------------------------------------------
-// Some pins are aliased... so we use a simple look-up table to map them correctly
+// A note on pin aliasing, because upstream had a look-up table here that was wrong.
+//
+// CRU read bits 1-15 report the interrupt lines and bits 16-31 report the 16 I/O
+// pins P0-P15. The eight versatile pins are shared - INT7*/P15 down to INT15*/P7 -
+// so bit 23 (P7) and bit 15 (INT15*) are the same piece of silicon. But they are
+// still separate CRU addresses, and a read of bit 16+n returns P(n) whatever else
+// that pin is called. For an output pin that is the last value written to it.
+//
+// The TI-99/4A never reads the versatile pins through their interrupt addresses:
+// bits 1-2 are the interrupt lines, 3-10 are the keyboard matrix, and the cassette
+// port lives at 22-27. So no aliasing is needed at all - reads of 16-31 are plain
+// loopback, which is what the cassette DSR depends on when it reads back the motor
+// and audio-gate bits it just set.
+//
+// Upstream mapped 23->15, 24->16 ... 31->23 (a flat -8), so a read of bit 27 - the
+// cassette input - returned pin 19, which is PIN_COL2, the keyboard column select.
+// Nothing read those bits before cassette support, which is why it never showed.
 // ---------------------------------------------------------------------------------
-u16 CRU_AliasTable[] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,15,16,17,18,19,20,21,22,23};
 
 // --------------------------------------------------------------------------------------------
 // The entire TMS9901 struct and state information is placed into .DTCM fast memory on the DS
@@ -91,8 +107,83 @@ void TMS9901_Reset(void)
     // Set the state of the 32 I/O pins... with the first pin being special to indicate timer active or IO mode active
     // -------------------------------------------------------------------------------------------------------------------
     tms9901.PinState[PIN_TIMER_OR_IO]  =  IO_MODE;
+    tms9901.TimerLoadCycle             =  tms9900.cycles;
 
     TMS9900_ClearInterrupt(0xFFFF);
+}
+
+// -----------------------------------------------------------------------------------------
+// Bring TimerCounter up to date with the CPU cycle count.
+//
+// The 9901 decrementer ticks once every 64 CPU clocks and runs continuously - it does not
+// stop when the CPU drops into clock mode to look at it. What clock mode does is latch the
+// current value into the register reads come from (TimerLatch below). That distinction
+// matters here: the cassette DSR uses the timer as a stopwatch, entering and leaving clock
+// mode on every measurement, so anything that reset the count or dropped the accumulated
+// remainder on each read would make the clock run slow by up to a tick every time.
+//
+// Upstream decremented by a flat 3 every scanline, which averages out to about the right
+// frequency but quantises every read to a 63.7us boundary in steps of 3 ticks. Against a
+// bit cell of roughly 700us that is enough jitter to corrupt the decode, so the counter
+// is now derived from tms9900.cycles instead of stepped.
+//
+// tms9900.cycles is a free-running u32 that wraps every ~24 minutes at 3MHz, hence the
+// unsigned delta - never compare the absolute values.
+// -----------------------------------------------------------------------------------------
+void TMS9901_TimerSnapshot(void)
+{
+    if (tms9901.TimerStart == 0) return;                            // No timer programmed
+
+    u32 elapsed = (u32)(tms9900.cycles - tms9901.TimerLoadCycle) >> 6;  // 64 CPU clocks per tick
+    if (elapsed == 0) return;
+
+    tms9901.TimerLoadCycle += (elapsed << 6);                       // Keep the sub-tick remainder
+
+    // The decrementer counts TimerStart down to 0 and reloads, so one full pass is
+    // TimerStart+1 ticks. Anything past the current count has wrapped at least once.
+    u32 span = tms9901.TimerStart + 1;
+    if (elapsed >= tms9901.TimerCounter + 1)
+    {
+        TMS9901_RaiseTimerInterrupt();
+        elapsed -= (tms9901.TimerCounter + 1);
+        tms9901.TimerCounter = tms9901.TimerStart - (elapsed % span);
+    }
+    else
+    {
+        tms9901.TimerCounter -= elapsed;
+    }
+}
+
+// -----------------------------------------------------------------------------------------
+// Drive one of the 32 I/O pins and run whatever hangs off it.
+//
+// Reached from two places: a plain write while in I/O mode, and a write to a pin above 15
+// while in clock mode. The 9901 does both things on that second case - it drops out of
+// clock mode *and* drives the pin - but upstream only did the first, so the data bit was
+// discarded. That went unnoticed until cassette support arrived, because clock mode is
+// only used by the cassette DSR, which times its bit cells against the timer and writes
+// the data line while it is in there. Every data bit of a SAVE was being swallowed.
+// -----------------------------------------------------------------------------------------
+static inline void TMS9901_WritePin(u8 cruA, u8 dataBit)
+{
+    tms9901.PinState[cruA] = dataBit;
+
+    if (cruA == PIN_TIMER_INT)
+    {
+        // Any write to pin 3 will clear the timer interrupt
+        TMS9901_ClearTimerInterrupt();
+    }
+    else if (cruA == PIN_VDP_INT && dataBit) // Are we unmasking... Need to pass through the interrupt state (River Rescue requires this)
+    {
+        if (tms9901.VDPIntteruptInProcess) TMS9900_RaiseInterrupt(INT_VDP); else TMS9900_ClearInterrupt(INT_VDP);
+    }
+    else if (cruA >= PIN_CS1_MOTOR && cruA <= PIN_TAPE_OUT)
+    {
+        // Cassette: motor relays, audio gate and the data line out. The pin state is
+        // already stored above (the DSR reads bits 22-25 back), so the deck only needs
+        // telling that something changed.
+        cassette_cru_write(cruA, dataBit);
+    }
 }
 
 // -----------------------------------------------------------------------------------------
@@ -156,12 +247,21 @@ ITCM_CODE void TMS9901_WriteCRU(u16 cruAddress, u16 data, u8 num)
             u8 cruA = cruAddress & 0x1F; // Map down to 32 bits...
 
             // -------------------------------------------------------------------------------------------------
-            // Bit 0 is special as it defines if we are in Timer or I/O mode... We don't yet handle timer
-            // mode but it's only used for Cassette IO which is not currently supported but we track it still.
+            // Bit 0 is special as it defines if we are in Timer or I/O mode. The cassette DSR flips into
+            // clock mode to read the decrementer as a stopwatch, so the two transitions matter: going in
+            // latches the current count, coming out restarts it from where the latch left off.
             // -------------------------------------------------------------------------------------------------
             if (cruA == PIN_TIMER_OR_IO)
             {
-                tms9901.PinState[PIN_TIMER_OR_IO] = (dataBit ? TIMER_MODE : IO_MODE);
+                u8 newMode = (dataBit ? TIMER_MODE : IO_MODE);
+                if (newMode == TIMER_MODE)
+                {
+                    // Entering clock mode latches the live decrementer into the register
+                    // the CPU reads. The decrementer itself carries on regardless.
+                    TMS9901_TimerSnapshot();
+                    tms9901.TimerLatch = tms9901.TimerCounter;
+                }
+                tms9901.PinState[PIN_TIMER_OR_IO] = newMode;
             }
             else
             if (tms9901.PinState[PIN_TIMER_OR_IO] == TIMER_MODE)
@@ -184,11 +284,16 @@ ITCM_CODE void TMS9901_WriteCRU(u16 cruAddress, u16 data, u8 num)
                     else tms9901.TimerStart &= ~(1 << (cruA-1));
                     tms9901.TimerStart &= 0x3FFF;                           // 14 bits of Timer
                     tms9901.TimerCounter = tms9901.TimerStart;              // Timer will countdown only in IO mode
+                    tms9901.TimerLatch = tms9901.TimerStart;                // reads see the new value at once
+                    tms9901.TimerLoadCycle = tms9900.cycles;                // ... measured from right now
                     TMS9900_SetAccurateEmulationFlag(ACCURATE_EMU_TIMER);   // Force timer to be dealt with...
                 }
                 else if (cruA > 15)
                 {
-                    tms9901.PinState[PIN_TIMER_OR_IO] = IO_MODE;        // Writes to pin 16 or more result in exit back to IO mode
+                    // A write above pin 15 drops the chip out of clock mode - and still
+                    // lands on the pin. See TMS9901_WritePin above for why that matters.
+                    tms9901.PinState[PIN_TIMER_OR_IO] = IO_MODE;
+                    TMS9901_WritePin(cruA, dataBit);
                 }
             }
             else    // We're in I/O Mode
@@ -197,16 +302,7 @@ ITCM_CODE void TMS9901_WriteCRU(u16 cruAddress, u16 data, u8 num)
                 // Just save the data bit (0 or 1) for the pin in I/O mode. We can decode the keyboard
                 // column and alpha-lock easily enough with the use of defines from tms9901.h
                 // --------------------------------------------------------------------------------------
-                tms9901.PinState[cruA] = dataBit;
-                if (cruA == PIN_TIMER_INT)
-                {
-                    // Any write to pin 3 will clear the timer interrupt
-                    TMS9901_ClearTimerInterrupt();
-                }
-                else if (cruA == PIN_VDP_INT && dataBit) // Are we unmasking... Need to pass through the interrupt state (River Rescue requires this)
-                {
-                    if (tms9901.VDPIntteruptInProcess) TMS9900_RaiseInterrupt(INT_VDP); else TMS9900_ClearInterrupt(INT_VDP);
-                }
+                TMS9901_WritePin(cruA, dataBit);
             }
         }
         cruAddress++;   // Move to the next CRU bit (if any)
@@ -244,17 +340,38 @@ ITCM_CODE u16 TMS9901_ReadCRU(u16 cruAddress, u8 num)
         }
         else
         {
-            cruAddress &= 0x1F;     // CRU mirrors
+            // The pin number is kept in its own local. Upstream aliased in place and then
+            // incremented the aliased value at the bottom of the loop, so a multi-bit STCR
+            // reaching into the aliased region walked the wrong addresses from the second
+            // bit on. Latent while only the identity-mapped keyboard bits were ever read.
+            u8 cruA = cruAddress & 0x1F;     // CRU mirrors
 
-            if (tms9901.PinState[PIN_TIMER_OR_IO] == TIMER_MODE)    // We handle bit 0 thru 15 in Timer Mode
+            // Clock mode only changes what bits 0-15 mean. Bits 16-31 are the I/O pins
+            // whatever mode the chip is in - and that matters as much as the write side
+            // did: the cassette DSR times its bit cells against the timer, so it polls the
+            // tape input from inside clock mode. Upstream ran the clock decode over all 32
+            // bits, so a read of bit 27 came back as a bit of the timer register and the
+            // tape was never seen at all. Reading does not drop out of clock mode - only
+            // a write above pin 15 does that.
+            if (tms9901.PinState[PIN_TIMER_OR_IO] == TIMER_MODE && cruA <= 15)
             {
-                switch (cruAddress)
+                switch (cruA)
                 {
                     case 0:     bitState = 1;                                                                               break;     // Bit 0 in timer mode always returns '1'
                     case 15:    bitState = ((tms9901.VDPIntteruptInProcess && tms9901.PinState[PIN_VDP_INT]) ||
                                             (tms9901.TimerIntteruptInProcess && tms9901.PinState[PIN_TIMER_INT]) ? 0:1);    break;     // Pin 15 is for either VDP or Timer interrupt... report if that's set
-                    default:    bitState = (tms9901.TimerCounter & (1<<(cruAddress-1))) ? 1:0;                              break;     // Otherwise get the timer bit and report it
+                    default:    bitState = (tms9901.TimerLatch & (1<<(cruA-1))) ? 1:0;                                      break;     // Otherwise report the latched timer bit
                 }
+            }
+            else if (cruA == PIN_TAPE_IN)
+            {
+                // ------------------------------------------------------------------------------
+                // Cassette input. Read ahead of the alias table on purpose: bit 27 is P11, which
+                // aliases to read bit 11, and routing it through the table would put it back in
+                // the keyboard/interrupt decode below. With no tape mounted this returns the
+                // idle level, so a cart that pokes at the CRU sees what it always did.
+                // ------------------------------------------------------------------------------
+                bitState = cassette_read_bit();
             }
             else    // This is IO mode - there are some aliased pins we need to be careful of...
             {
@@ -264,10 +381,7 @@ ITCM_CODE u16 TMS9901_ReadCRU(u16 cruAddress, u8 num)
                 //2 >0004   I+  VDP interrupts incoming line
                 // --------------------------------------------------
 
-                // Some pins are aliased - this will correct the pin number
-                cruAddress = CRU_AliasTable[cruAddress];
-
-                switch (cruAddress)
+                switch (cruA)
                 {
                     case 0:     bitState = 0;                                           break;      // Bit 0 in IO mode always returns '0'
 
@@ -293,11 +407,11 @@ ITCM_CODE u16 TMS9901_ReadCRU(u16 cruAddress, u8 num)
                             // This handles both Keybaord and Joystick (P1 and P2) inputs in a unified manner... to the TI-99/4a, it's all the same.
                             // ------------------------------------------------------------------------------------------------------------------------
                             u8 column = (tms9901.PinState[PIN_COL3]<<2) | (tms9901.PinState[PIN_COL2]<<1) | (tms9901.PinState[PIN_COL1]<<0);
-                            if (tms9901.Keyboard[TIKeys[cruAddress-3][column]]) bitState = 0;
+                            if (tms9901.Keyboard[TIKeys[cruA-3][column]]) bitState = 0;
                         }
                         break;
 
-                    default:    bitState = tms9901.PinState[cruAddress]; break;                        // Otherwise loopback: returned bit will be last value written
+                    default:    bitState = tms9901.PinState[cruA]; break;                             // Otherwise loopback: returned bit will be last value written
                 }
             }
         }

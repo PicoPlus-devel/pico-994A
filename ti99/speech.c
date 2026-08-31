@@ -12,6 +12,9 @@
 // PC/subcycle counters. That is inaudible for playback and much cheaper.
 // =====================================================================================
 #include <string.h>
+#ifdef TI99_SPEECH_TRACE
+#include <stdio.h>
+#endif
 #include "ti99_compat.h"
 #include "ti99.h"
 #include "speech.h"
@@ -133,7 +136,6 @@ static const u8 kbits[10] = { 5, 5, 4, 4, 4, 4, 4, 3, 3, 3 };
 // each close a fraction of the gap to the new frame's values, then period 0 snaps
 // exactly onto them just before the next frame is parsed.
 static const u8 interp_shift[8] = { 0, 3, 3, 3, 2, 2, 1, 1 };
-static const u8 interp_order[8] = { 1, 2, 3, 4, 5, 6, 7, 0 };
 
 static const s16 *ktables_5200[10] = {
     k1_5200, k2_5200, k3_5200, k4_5200, k5_5200,
@@ -190,12 +192,44 @@ typedef struct
     u16  rng;
     int  pitch_count;
 
-    u8   ip;                    // index into interp_order[]
+    u8   ip;                    // interpolation period, 0..7 within the frame
     u8   sample_in_period;      // 0..24
     u8   frame_started;
 } tms52xx_t;
 
 static tms52xx_t sp;
+
+// =====================================================================================
+// Trace counters (-DTI99_SPEECH_TRACE)
+//
+// Everything the CPU side does to the chip, tallied. The point is to separate causes
+// that all sound the same: never addressed, addressed but never told to speak, told to
+// speak but never enough bytes to start, started but starved, or started and finished
+// normally with the fault further down in the synthesiser or the mixer.
+// =====================================================================================
+#ifdef TI99_SPEECH_TRACE
+typedef struct
+{
+    u32 writes, reads;
+    u32 data_bytes;                 // writes that went into the FIFO
+    u32 cmd_readbyte, cmd_readbranch, cmd_loadaddr, cmd_speak, cmd_speakext, cmd_reset;
+    u32 talk_starts, halts;
+    u32 stop_frames, underruns;     // clean end of phrase vs FIFO ran dry mid-frame
+    u32 rom_reads;                  // Read Byte answered out of the vocabulary ROM
+    u32 fifo_hw;                    // FIFO high-water mark
+    u32 samples;                    // times SpeechGetSample() was asked for output
+    u8  last_status, last_rom_byte;
+    u32 last_rom_addr;
+} speech_trace_t;
+
+static speech_trace_t trc;
+static u32 trc_dirty  = 0;          // something happened since the last summary
+static u32 trc_frames = 0;
+
+#define TRC(field)  do { trc.field++; trc_dirty = 1; } while (0)
+#else
+#define TRC(field)  do { } while (0)
+#endif
 
 // =====================================================================================
 // FIFO and bit extraction
@@ -229,7 +263,17 @@ static void update_status(void)
     }
 }
 
-// Pull one bit, MSB first, from whichever source is feeding the frame decoder.
+// Pull one bit from whichever source is feeding the frame decoder.
+//
+// Bit order is the thing to get right here: the LPC bitstream runs **least significant
+// bit first within each byte**, because the TMS6100 shifts its serial data out that way
+// and cartridge speech data is stored in the same order. Fields are still assembled most
+// significant bit first out of that stream, so a byte is effectively read back to front.
+// (This is why the Talkie library bit-reverses every byte before parsing it.) Reading
+// MSB-first instead still decodes *something* - the fields simply land on the wrong bits,
+// the stream drifts, and sooner or later a 4-bit energy field reads as 15 and the phrase
+// stops dead partway through.
+//
 // Returns 0 and sets `ran_out` when a Speak External stream is exhausted - the chip
 // treats that exactly like a stop frame.
 static u8 ran_out;
@@ -242,7 +286,7 @@ static u8 read_bit(void)
     {
         if (sp.fifo_count == 0) { ran_out = 1; return 0; }
 
-        bit = (sp.fifo[sp.fifo_head] >> (7 - sp.fifo_bit)) & 1;
+        bit = (sp.fifo[sp.fifo_head] >> sp.fifo_bit) & 1;
         if (++sp.fifo_bit >= 8)
         {
             sp.fifo_bit = 0;
@@ -255,7 +299,7 @@ static u8 read_bit(void)
         if (!sp.rom || sp.rom_size == 0) { ran_out = 1; return 0; }
 
         u32 addr = sp.rom_addr % sp.rom_size;
-        bit = (sp.rom[addr] >> (7 - sp.fifo_bit)) & 1;
+        bit = (sp.rom[addr] >> sp.fifo_bit) & 1;
         if (++sp.fifo_bit >= 8)
         {
             sp.fifo_bit = 0;
@@ -265,6 +309,7 @@ static u8 read_bit(void)
     return bit;
 }
 
+// Fields are assembled most significant bit first out of the LSB-first bit stream.
 static int read_bits(u8 count)
 {
     int value = 0;
@@ -288,7 +333,7 @@ static void parse_frame(void)
     sp.zpar = sp.uv_zpar = 0;
 
     sp.new_energy_idx = (u8)read_bits(4);
-    if (ran_out) { sp.stopping = 1; return; }
+    if (ran_out) { sp.stopping = 1; TRC(underruns); return; }
 
     if (sp.new_energy_idx == 0)
     {
@@ -300,14 +345,15 @@ static void parse_frame(void)
     {
         // Stop frame: finish out this frame's energy ramp, then halt.
         sp.stopping = 1;
+        TRC(stop_frames);
         return;
     }
 
     u8 repeat = (u8)read_bits(1);
-    if (ran_out) { sp.stopping = 1; return; }
+    if (ran_out) { sp.stopping = 1; TRC(underruns); return; }
 
     sp.new_pitch_idx = (u8)read_bits(6);
-    if (ran_out) { sp.stopping = 1; return; }
+    if (ran_out) { sp.stopping = 1; TRC(underruns); return; }
 
     // An unvoiced frame carries no K5..K10; they are forced to zero instead.
     sp.uv_zpar = (sp.new_pitch_idx == 0) ? 1 : 0;
@@ -317,7 +363,7 @@ static void parse_frame(void)
     for (int i = 0; i < 4; i++)
     {
         sp.new_k_idx[i] = (u8)read_bits(kbits[i]);
-        if (ran_out) { sp.stopping = 1; return; }
+        if (ran_out) { sp.stopping = 1; TRC(underruns); return; }
     }
 
     if (sp.new_pitch_idx == 0) return;   // unvoiced: only four K's are transmitted
@@ -325,7 +371,7 @@ static void parse_frame(void)
     for (int i = 4; i < 10; i++)
     {
         sp.new_k_idx[i] = (u8)read_bits(kbits[i]);
-        if (ran_out) { sp.stopping = 1; return; }
+        if (ran_out) { sp.stopping = 1; TRC(underruns); return; }
     }
 }
 
@@ -347,40 +393,42 @@ static void start_frame(void)
 }
 
 // One interpolation step, run at the start of each of the eight periods in a frame.
+//
+// Period 0 is where the new frame's parameters arrive, and the chip does not interpolate
+// there. Periods 1-7 then glide the current values toward the target by 1/8, 1/8, 1/8,
+// 1/4, 1/4, 1/2, 1/2 - which deliberately falls about 9% short, because the following
+// frame arrives and becomes the new target before the glide ever completes. That endless
+// chase is the point: the filter's coefficients are always moving, never stepping.
+//
+// When interpolation is inhibited - across a change of voicing, or in or out of silence -
+// gliding between the two is meaningless, so the parameters take their new values at
+// once, at period 0, and hold.
 static void interpolate(void)
 {
-    u8 period = interp_order[sp.ip];
-    u8 shift  = interp_shift[period];
-
     int target_energy = sp.zpar ? 0 : energytable[sp.new_energy_idx];
     int target_pitch  = sp.zpar ? 0 : pitchtab[sp.new_pitch_idx];
 
-    if (sp.inhibit && period != 0)
+    if (sp.ip == 0)
     {
-        // Hold the old values for this period; the snap at period 0 still lands us on
-        // the new frame before the next one is parsed.
-        return;
-    }
+        if (!sp.inhibit) return;        // targets loaded; the glide starts next period
 
-    if (shift == 0)
-    {
         sp.cur_energy = target_energy;
         sp.cur_pitch  = target_pitch;
         for (int i = 0; i < 10; i++)
-        {
-            int t = (sp.zpar || (i >= 4 && sp.uv_zpar)) ? 0 : ktable[i][sp.new_k_idx[i]];
-            sp.cur_k[i] = t;
-        }
+            sp.cur_k[i] = (sp.zpar || (i >= 4 && sp.uv_zpar))
+                        ? 0 : ktable[i][sp.new_k_idx[i]];
+        return;
     }
-    else
+
+    if (sp.inhibit) return;             // already taken, at period 0
+
+    u8 shift = interp_shift[sp.ip];
+    sp.cur_energy += (target_energy - sp.cur_energy) >> shift;
+    sp.cur_pitch  += (target_pitch  - sp.cur_pitch)  >> shift;
+    for (int i = 0; i < 10; i++)
     {
-        sp.cur_energy += (target_energy - sp.cur_energy) >> shift;
-        sp.cur_pitch  += (target_pitch  - sp.cur_pitch)  >> shift;
-        for (int i = 0; i < 10; i++)
-        {
-            int t = (sp.zpar || (i >= 4 && sp.uv_zpar)) ? 0 : ktable[i][sp.new_k_idx[i]];
-            sp.cur_k[i] += (t - sp.cur_k[i]) >> shift;
-        }
+        int t = (sp.zpar || (i >= 4 && sp.uv_zpar)) ? 0 : ktable[i][sp.new_k_idx[i]];
+        sp.cur_k[i] += (t - sp.cur_k[i]) >> shift;
     }
 }
 
@@ -432,6 +480,7 @@ static void halt_speech(void);
 s16 SpeechGetSample(void)
 {
     if (!sp.talking) return 0;
+    TRC(samples);
 
     // Start of an interpolation period: 25 samples each, eight to a 25ms frame.
     if (sp.sample_in_period == 0)
@@ -487,12 +536,17 @@ s16 SpeechGetSample(void)
         }
     }
 
-    // The lattice works at 14-bit scale. Halving it puts full-scale speech at about a
-    // quarter of int16, which leaves the PSG room to sit alongside it without the sum
-    // clipping on every loud frame.
-    if (sample >  16383) sample =  16383;
-    if (sample < -16384) sample = -16384;
-    return (s16)(sample >> 1);
+    // Level. The lattice runs at the chip's own 14-bit scale, so the clip below is the
+    // chip's, not ours - and real speech never reaches it: measured across all 22 of
+    // Parsec's phrases the peak is ~5400 and the RMS ~400. Treating 16384 as full scale
+    // and halving was therefore wrong twice over, and left a loud phrase peaking at 2682
+    // - about 12 dB under a single PSG voice, which is why speech was almost inaudible
+    // next to the game. Doubling instead puts a loud phrase at ~10700, right where one
+    // PSG channel at full volume sits, and still leaves the mixer half its range for the
+    // game's own sound. This is a pure gain change: the waveform is untouched.
+    if (sample >  8191) sample =  8191;
+    if (sample < -8192) sample = -8192;
+    return (s16)(sample << 1);
 }
 
 u8 SpeechIsTalking(void) { return sp.talking; }
@@ -508,6 +562,7 @@ u8 SpeechIsTalking(void) { return sp.talking; }
 // =====================================================================================
 static void halt_speech(void)
 {
+    TRC(halts);
     sp.talking        = 0;
     sp.speak_external = 0;      // the chip drops DDIS when talk status falls
     sp.stopping       = 0;
@@ -545,6 +600,7 @@ static void prime_synth(void)
 void SpeechDataWrite(u8 data)
 {
     if (!sp.present) return;
+    TRC(writes);
 
     // ---------------------------------------------------------------------------------
     // While Speak External is active every write is a data byte for the FIFO - the chip
@@ -554,6 +610,10 @@ void SpeechDataWrite(u8 data)
     if (sp.speak_external)
     {
         fifo_push(data);
+        TRC(data_bytes);
+#ifdef TI99_SPEECH_TRACE
+        if (sp.fifo_count > trc.fifo_hw) trc.fifo_hw = sp.fifo_count;
+#endif
 
         // Speak External does not start the chip talking; it starts once enough bytes
         // have arrived to clear the buffer-low flag. Games rely on this to stream.
@@ -563,6 +623,7 @@ void SpeechDataWrite(u8 data)
         {
             prime_synth();
             sp.talking = 1;
+            TRC(talk_starts);
         }
         update_status();
         return;
@@ -590,13 +651,19 @@ void SpeechDataWrite(u8 data)
     switch (data & 0x70)
     {
         case 0x70:      // Reset
+            TRC(cmd_reset);
             SpeechInit();
             break;
 
         case 0x10:      // Read Byte from the vocabulary ROM
+            TRC(cmd_readbyte);
             if (sp.talking) break;              // ignored while speaking
             if (sp.rom && sp.rom_size)
             {
+#ifdef TI99_SPEECH_TRACE
+                trc.rom_reads++;
+                trc.last_rom_addr = sp.rom_addr % sp.rom_size;
+#endif
                 sp.read_data = sp.rom[sp.rom_addr % sp.rom_size];
                 sp.rom_addr++;
             }
@@ -608,6 +675,7 @@ void SpeechDataWrite(u8 data)
             break;
 
         case 0x30:      // Read and Branch - follow the two-byte pointer at the address
+            TRC(cmd_readbranch);
             if (sp.talking) break;
             if (sp.rom && sp.rom_size >= 2)
             {
@@ -620,12 +688,15 @@ void SpeechDataWrite(u8 data)
             break;
 
         case 0x40:      // Load Address - first of five nibbles
+            TRC(cmd_loadaddr);
             if (sp.talking) break;
             sp.rom_addr = (sp.rom_addr >> 4) | ((u32)(data & 0x0F) << 16);
             sp.addr_nibbles = 2;                // this one has arrived, four to go
             break;
 
         case 0x50:      // Speak - frames come from the vocabulary ROM, starting now
+            TRC(cmd_speak);
+            TRC(talk_starts);
             prime_synth();
             sp.speak_external = 0;
             sp.talking = 1;
@@ -633,6 +704,7 @@ void SpeechDataWrite(u8 data)
             break;
 
         case 0x60:      // Speak External - arm the FIFO and wait for it to fill
+            TRC(cmd_speakext);
             fifo_reset();
             sp.speak_external = 1;
             sp.buffer_low     = 1;
@@ -651,13 +723,21 @@ u8 SpeechDataRead(void)
     // detects that speech is unavailable.
     if (!sp.present) return 0xFF;
 
+    TRC(reads);
+
     if (sp.read_pending)
     {
         sp.read_pending = 0;
+#ifdef TI99_SPEECH_TRACE
+        trc.last_rom_byte = sp.read_data;
+#endif
         return sp.read_data;
     }
 
     update_status();
+#ifdef TI99_SPEECH_TRACE
+    trc.last_status = sp.status;
+#endif
     return sp.status;
 }
 
@@ -702,3 +782,44 @@ void SpeechSetChip(u8 chipType)
 }
 
 u8 SpeechIsPresent(void) { return sp.present; }
+
+// =====================================================================================
+// Trace summary
+//
+// Called once per emulated frame. Prints at most once a second, and only when the CPU
+// has touched the chip since the last line, so an idle machine stays quiet.
+//
+// Reading the line:
+//   wr/rd 0/0          nothing ever addressed >9000-97FF - the fault is in the memory
+//                      map or the game never even looked for the module
+//   rd > 0, wr 0       the game probed and gave up: detection failed
+//   ext 0              no Speak External - the game decided speech is absent
+//   ext > 0, talk 0    the stream was armed but the FIFO never passed 8 bytes, so
+//                      synthesis never started (watch hw - the high-water mark)
+//   talk > 0, smp 0    talking, but nothing ever asked for samples - mixer side
+//   under >> stop      the FIFO is being starved: the game is feeding it more slowly
+//                      than we drain it, or we only drain once per frame in a lump
+// =====================================================================================
+#ifdef TI99_SPEECH_TRACE
+void SpeechTraceTick(void)
+{
+    if (++trc_frames < 60) return;
+    trc_frames = 0;
+    if (!trc_dirty) return;
+    trc_dirty = 0;
+
+    printf("[spch] wr=%lu rd=%lu | cmd: la=%lu rb=%lu rbr=%lu spk=%lu ext=%lu rst=%lu | "
+           "data=%lu hw=%lu talk=%lu halt=%lu stop=%lu under=%lu smp=%lu | "
+           "rom=%lu@%05lX->%02X stat=%02X present=%u\n",
+           (unsigned long)trc.writes,        (unsigned long)trc.reads,
+           (unsigned long)trc.cmd_loadaddr,  (unsigned long)trc.cmd_readbyte,
+           (unsigned long)trc.cmd_readbranch,(unsigned long)trc.cmd_speak,
+           (unsigned long)trc.cmd_speakext,  (unsigned long)trc.cmd_reset,
+           (unsigned long)trc.data_bytes,    (unsigned long)trc.fifo_hw,
+           (unsigned long)trc.talk_starts,   (unsigned long)trc.halts,
+           (unsigned long)trc.stop_frames,   (unsigned long)trc.underruns,
+           (unsigned long)trc.samples,
+           (unsigned long)trc.rom_reads,     (unsigned long)trc.last_rom_addr,
+           trc.last_rom_byte, trc.last_status, sp.present);
+}
+#endif

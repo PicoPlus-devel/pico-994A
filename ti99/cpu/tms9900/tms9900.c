@@ -1450,26 +1450,15 @@ void TMS9900_RunAccurate(void)
     u32 myCounter = tms9900.cycles+191-tms9900.cycleDelta;
 
     // ---------------------------------------------------------------------------------------------------
-    // Timer support is quite preliminary - but it's only used by cassette tape load/timeout and a tiny
-    // number of other programs use it. We don't get it quite right here... we are only decrementing the
-    // timer by 3 ticks every scanline which approximates the 9901 timer (64 CPU clocks per tick).
-    // Classic 99 does this more accurately and checks after every instruction for a possible decrement.
-    // But this is good enough for DS use and produces a roughly 46.9KHz timer which isn't too far off.
+    // TMS9901 timer. Upstream decremented by a flat 3 ticks per scanline, which averages out near the
+    // real 46.9KHz (64 CPU clocks per tick) but quantises the value the CPU reads back to a 63.7us
+    // scanline boundary. The cassette DSR uses this timer as a stopwatch to measure the gap between
+    // transitions on the tape input, against a bit cell of roughly 700us, so that quantisation was
+    // enough to corrupt the decode. TMS9901_TimerSnapshot() derives the counter from tms9900.cycles
+    // instead; calling it once per scanline is only about keeping the interrupt cadence, since reads
+    // bring it up to date themselves.
     // ---------------------------------------------------------------------------------------------------
-    if (tms9901.TimerCounter)   // Has a timer been programmed?
-    {
-        if (tms9901.PinState[PIN_TIMER_OR_IO] == IO_MODE)   // Timer only runs when we are in IO Mode
-        {
-            // This is a gross misrepresentation of how the timer works... needs to be more accurate but good enough for now
-            if (tms9901.TimerCounter > 3) tms9901.TimerCounter -= 3;
-            else
-            {
-                // Timeout... possibly raise interrupt and reload timer
-                TMS9901_RaiseTimerInterrupt();
-                tms9901.TimerCounter = tms9901.TimerStart;
-            }
-        }
-    }
+    TMS9901_TimerSnapshot();
 
     do
     {

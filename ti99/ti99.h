@@ -82,8 +82,13 @@ extern void TI99RenderLine(u8 y);      // one scanline is ready in XBuf
 extern void TI99UpdateScreen(void);    // the frame is complete
 extern void processDirectAudio(void);  // per-scanline audio sampling (sounddriver == 2)
 extern void DS_Print(int x, int y, int scr, char *msg);  // status text -> UART
-// PSRAM allocation for SAMS. Returns NULL on boards with no PSRAM fitted, which
-// is the signal to stay on the plain 32K expansion. Implemented in main.cpp.
+// Preferred-PSRAM allocation for the buffers the machine always needs: PSRAM when the
+// board has it, SRAM otherwise, so every board still runs. Implemented in main.cpp.
+extern void *ti99_mem_alloc(size_t size);
+extern void  ti99_mem_free(void *p);
+
+// Strict PSRAM allocation. Returns NULL on boards with no PSRAM fitted, which is the
+// signal to leave the optional feature switched off. Implemented in main.cpp.
 extern void *ti99_psram_alloc(size_t size);
 extern void  ti99_psram_free(void *p);
 

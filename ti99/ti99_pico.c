@@ -29,6 +29,7 @@
 #include "SAMS.h"
 #include "disk.h"
 #include "pcode.h"
+#include "cassette.h"
 #include "rpk/rpk.h"
 #include "speech.h"
 
@@ -80,16 +81,21 @@ static void free_ptr(u8 **p) { if (*p) { free(*p); *p = NULL; } }
 void ti99_free_memory(void)
 {
     disk_init();                 // closes any open .DSK handles
+    cassette_shutdown();         // closes the tape and frees its buffers
     SAMS_Release();              // returns the SAMS backing store to PSRAM
 
-    free_ptr(&MemCPU);
-    free_ptr(&MemGROM);
+    // MemCPU and MemGROM came from ti99_mem_alloc, so they go back through its free.
+    if (MemCPU)  { ti99_mem_free(MemCPU);  MemCPU  = NULL; }
+    if (MemGROM) { ti99_mem_free(MemGROM); MemGROM = NULL; }
     free_ptr(&pVDPVidMem);
-    free_ptr(&DISK_DSR);
-    free_ptr(&SharedMemBuffer);
+    // SharedMemBuffer / SharedMemBufferBig are upstream's DS scratch buffers. Nothing in
+    // this port allocates them - DSK3 is not buffered and SAMS has its own allocation -
+    // so they stay NULL and there is nothing to release.
 
+    // These came from ti99_psram_alloc, so they go back the same way.
+    if (DISK_DSR)  { ti99_psram_free(DISK_DSR);  DISK_DSR  = NULL; }
     SpeechSetROM(NULL, 0);
-    free_ptr(&speechROM);
+    if (speechROM) { ti99_psram_free(speechROM); speechROM = NULL; }
 
     if (MemCART) { ti99_cart_free(); }
     biosLoaded = 0;
@@ -99,10 +105,21 @@ void ti99_free_memory(void)
 // Returns 0 on success. Everything here is per-game and released by ti99_free_memory().
 int ti99_alloc_memory(void)
 {
-    MemCPU      = (u8 *)malloc(0x10000);        // 64K CPU address space
-    MemGROM     = (u8 *)malloc(0x10000);        // 64K GROM address space
-    pVDPVidMem  = (u8 *)malloc(0x4000);         // 16K VDP video RAM
+    // The two 64K address spaces are the largest thing the machine needs, so they go to
+    // PSRAM on boards that have it and free 128K of SRAM. ti99_mem_alloc falls back to
+    // SRAM where there is no PSRAM, so nothing is excluded - the emulator just runs in
+    // the tighter footprint it used to.
+    //
+    // Video RAM stays in SRAM deliberately: the VDP walks it for every scanline it
+    // renders, and 16K is cheap enough not to be worth the latency.
+    MemCPU      = (u8 *)ti99_mem_alloc(0x10000);   // 64K CPU address space
+    MemGROM     = (u8 *)ti99_mem_alloc(0x10000);   // 64K GROM address space
+    pVDPVidMem  = (u8 *)malloc(0x4000);            // 16K VDP video RAM
 
+    // The SDK's malloc panics instead of returning NULL, so in practice a shortfall
+    // shows up as a board reset rather than as an error here. These checks are kept for
+    // correctness, but the thing that actually keeps this working is the budget: 144K of
+    // SRAM for the machine, leaving room for the menu, FatFS, USB and the cartridge.
     if (!MemCPU || !MemGROM || !pVDPVidMem)
     {
         ti99_free_memory();
@@ -125,11 +142,15 @@ int ti99_alloc_memory(void)
 // the ~200K the rest of the machine needs; the great majority of TI carts are 8-32K.
 #define CART_SRAM_LIMIT   (64 * 1024)
 
+// The SDK's malloc panics rather than returning NULL when it cannot satisfy a request,
+// so "try SRAM, fall back to PSRAM" is not a thing that can work - the fallback is
+// unreachable and the board dies instead. Every allocation decision here is therefore
+// made from the size up front.
 static u8 cartInPsram = 0;
 
 void ti99_cart_free(void)
 {
-    if (MemSuperCartRAM) { free(MemSuperCartRAM); MemSuperCartRAM = NULL; }
+    if (MemSuperCartRAM) { ti99_psram_free(MemSuperCartRAM); MemSuperCartRAM = NULL; }
 
     if (MemCART)
     {
@@ -159,11 +180,14 @@ int ti99_cart_alloc(u32 size)
 
     if (size <= CART_SRAM_LIMIT)
     {
+        // Inside the budget the rest of the machine leaves free.
         MemCART = (u8 *)malloc(size);
         cartInPsram = 0;
     }
-    if (!MemCART)
+    else
     {
+        // Too big for the SRAM budget: this needs PSRAM, and asking without it would
+        // panic rather than fail, so check first and report a real error instead.
         MemCART = (u8 *)ti99_psram_alloc(size);
         cartInPsram = (MemCART != NULL);
     }
@@ -257,25 +281,35 @@ int ti99_load_bios(char *errorMessage, size_t errorMessageSize)
 
     biosLoaded = 1;
 
-    // The disk DSR is optional - without it DSK1-3 simply do not answer. Only spend the
-    // 8K on it when the file is actually present.
-    if (!DISK_DSR) DISK_DSR = (u8 *)malloc(0x2000);
+    // The disk DSR is optional - without it DSK1-3 simply do not answer. It lives in
+    // PSRAM, so disk support needs a board that has some: the SRAM budget is already
+    // spoken for by the 64K CPU space, 64K GROM space, 16K of video RAM and the
+    // cartridge, and there is no room to take another 8K out of it.
+    // ti99_psram_alloc returns NULL rather than panicking when there is no PSRAM.
+    if (!DISK_DSR) DISK_DSR = (u8 *)ti99_psram_alloc(0x2000);
     if (DISK_DSR)
     {
         memset(DISK_DSR, 0xFF, 0x2000);
         diskDsrLoaded = (load_bios_file("994aDISK.bin", DISK_DSR, 0x2000, NULL, NULL) == 0);
         if (!diskDsrLoaded)
         {
-            free(DISK_DSR);
+            ti99_psram_free(DISK_DSR);
             DISK_DSR = NULL;
             printf("[ti99] no 994aDISK.bin - DSK1-3 will not be available\n");
         }
+    }
+    else
+    {
+        printf("[ti99] no PSRAM - DSK1-3 not available\n");
     }
 
     // The Speech Synthesizer is always reported as attached: nearly all speech in
     // cartridges is streamed with Speak External and needs no vocabulary ROM at all.
     // spchrom.bin only adds the resident vocabulary.
-    if (!speechROM) speechROM = (u8 *)malloc(TI99_SPEECH_ROM_SIZE);
+    // The 32K vocabulary ROM goes to PSRAM for the same reason as the disk DSR, and it
+    // is four times the size. Without PSRAM the module still works - cartridge speech is
+    // streamed with Speak External and needs no vocabulary ROM - only CALL SAY is lost.
+    if (!speechROM) speechROM = (u8 *)ti99_psram_alloc(TI99_SPEECH_ROM_SIZE);
     if (speechROM)
     {
         memset(speechROM, 0x00, TI99_SPEECH_ROM_SIZE);
@@ -286,7 +320,7 @@ int ti99_load_bios(char *errorMessage, size_t errorMessageSize)
         }
         else
         {
-            free(speechROM);
+            ti99_psram_free(speechROM);
             speechROM = NULL;
             SpeechSetROM(NULL, 0);      // module present, no resident vocabulary
             printf("[ti99] no spchrom.bin - speech works, resident vocabulary does not\n");
@@ -294,7 +328,7 @@ int ti99_load_bios(char *errorMessage, size_t errorMessageSize)
     }
     else
     {
-        SpeechSetROM(NULL, 0);
+        SpeechSetROM(NULL, 0);          // no PSRAM: cartridge speech only
     }
     SpeechSetChip(SPEECH_CHIP_TMS5200);   // what the TI-99/4A module actually shipped with
 
@@ -320,6 +354,7 @@ void ti99_reset(u8 initDisks)
 
     if (initDisks) disk_init();
     pcode_init();
+    cassette_init();
 }
 
 // -------------------------------------------------------------------------------------
@@ -560,11 +595,14 @@ int ti99_load_cart(const char *path, u8 initDisks, char *errorMessage, size_t er
     // layout the loader just parsed.
     if (myConfig.cartType == CART_TYPE_SUPERCART && MemSuperCartRAM == NULL)
     {
-        MemSuperCartRAM = (u8 *)malloc(0x8000);
+        // 32K, and taking it out of SRAM would mean an unguarded malloc of that size on
+        // a heap that is already mostly spoken for - which panics rather than failing.
+        // PSRAM instead, and a clear error when there is none.
+        MemSuperCartRAM = (u8 *)ti99_psram_alloc(0x8000);
         if (MemSuperCartRAM) memset(MemSuperCartRAM, 0x00, 0x8000);
         else
         {
-            snprintf(errorMessage, errorMessageSize, "No room for Super Cart RAM");
+            snprintf(errorMessage, errorMessageSize, "Super Cart needs a PSRAM board");
             return -1;
         }
     }

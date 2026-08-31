@@ -193,6 +193,17 @@ target_compile_definitions(${projectname} PRIVATE
     #HSTX_DEBUG=1
 )
 
+# ---------------------------------------------------------------------------
+# Speech Synthesizer trace. Off by default; -DTI99_SPEECH_TRACE=ON makes the
+# chip report once a second on stdout what the CPU is doing to it, which is the
+# only way to tell the several different causes of "no speech" apart.
+# ---------------------------------------------------------------------------
+option(TI99_SPEECH_TRACE "Log Speech Synthesizer activity to stdout" OFF)
+if(TI99_SPEECH_TRACE)
+    message(STATUS "Speech Synthesizer trace enabled")
+    target_compile_definitions(${projectname} PRIVATE TI99_SPEECH_TRACE=1)
+endif()
+
 if(NOT PICO_PLATFORM STREQUAL "rp2040")
     message(STATUS "Using PICO_PIO_USE_GPIO_BASE=1 for non-rp2040 platforms.")
     target_compile_definitions(${projectname} PRIVATE
@@ -237,7 +248,47 @@ if(ENABLE_PIO_USB EQUAL 1)
     message("Adding target link libraries for PIO USB support.")
     target_link_libraries(${projectname} PRIVATE tinyusb_pico_pio_usb)
 endif()
-
+# ---------------------------------------------------------------------------
+# USB drive mode: the "USB drive mode" entry in the settings menu shows the SD
+# card on a PC as a mass storage device. The device stack is started when that
+# screen opens and stopped when it closes, so nothing outside it changes; when
+# this is 0 no tinyusb device code is linked at all.
+#
+# RP2040 included: those boards take the no-PIO-USB route, so the USB host has
+# to give the native port back - gamepads stop while the card is mounted and the
+# console reboots on the way out.
+# ---------------------------------------------------------------------------
+option(ENABLE_USB_MSC "Show the SD card on a PC over USB from the settings menu" ON)
+if(ENABLE_USB_MSC)
+    set(USB_MSC_ENABLED 1)
+else()
+    set(USB_MSC_ENABLED 0)
+endif()
+message(STATUS "USB drive mode (mass storage): ${USB_MSC_ENABLED}")
+target_compile_definitions(${projectname} PRIVATE FRENS_USB_MSC=${USB_MSC_ENABLED})
+if(USB_MSC_ENABLED)
+    target_link_libraries(${projectname} PRIVATE tinyusb_device pico_unique_id)
+    # Widen the pool of claimable hardware spinlocks from 8 to 12.
+    #
+    # spin_lock_claim_unused() only hands out PICO_SPINLOCK_ID_CLAIM_FREE_FIRST
+    # ..LAST, which is ids 24..31 by default - eight in total. On PicoDVI builds
+    # dvi::DVI alone takes four of them (validTMDSQueue_, freeTMDSQueue_,
+    # validLineQueue_, freeLineQueue_ - util::Queue holds a util::SpinLock), and
+    # the TinyUSB host stack takes most of the rest, so bringing the device
+    # stack up for USB drive mode ran the pool dry and panicked with "No
+    # spinlocks are available" on the very first visit. HSTX builds have no
+    # PicoDVI and so never hit it.
+    #
+    # The striped range gives up the four ids instead. Striped locks are handed
+    # out round-robin and are shared by design, so a smaller range costs a
+    # little more contention and nothing else.
+    target_compile_definitions(${projectname} PRIVATE
+        PICO_SPINLOCK_ID_STRIPED_FIRST=16
+        PICO_SPINLOCK_ID_STRIPED_LAST=19
+        PICO_SPINLOCK_ID_CLAIM_FREE_FIRST=20
+        PICO_SPINLOCK_ID_CLAIM_FREE_LAST=31
+    )
+endif()
 # ---------------------------------------------------------------------------
 # Link
 # ---------------------------------------------------------------------------

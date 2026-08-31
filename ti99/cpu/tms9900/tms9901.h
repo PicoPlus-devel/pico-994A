@@ -56,6 +56,18 @@ enum PIN_STATE
 #define PIN_COL3            20
 #define PIN_ALPHA_LOCK      21
 
+// ---------------------------------------------------------
+// Cassette port. The console DSR bit-bangs these directly:
+// it drives the motor relays and the data line, and times
+// the bit cells against the 9901 timer below.
+// PIN_TAPE_IN is read-only, the rest are write-only.
+// ---------------------------------------------------------
+#define PIN_CS1_MOTOR       22
+#define PIN_CS2_MOTOR       23
+#define PIN_AUDIO_GATE      24
+#define PIN_TAPE_OUT        25
+#define PIN_TAPE_IN         27
+
 typedef struct _TMS9901
 {
     u8      Keyboard[TMS_KEY_MAX];      // Main TI-99/4a Keyboard plus joystick inputs for both P1 and P2
@@ -64,12 +76,15 @@ typedef struct _TMS9901
     u8      VDPIntteruptInProcess;      // Set to '1' if the VDP interrupt is in process
     u8      TimerIntteruptInProcess;    // Set to '1' if the Timer interrupt is in process
     u32     TimerStart;                 // The Starting value
-    u32     TimerCounter;               // The 14-bit Timer Counter 
+    u32     TimerCounter;               // The 14-bit Timer Counter
+    u32     TimerLoadCycle;             // tms9900.cycles when TimerCounter was last brought up to date
+    u32     TimerLatch;                 // What a clock-mode read returns: the count as of entering clock mode
 } TMS9901;
 
 extern TMS9901 tms9901;
 
 extern void     TMS9901_Reset(void);
+extern void     TMS9901_TimerSnapshot(void);
 extern void     TMS9901_WriteCRU(u16 cruAddress, u16 data, u8 num);
 extern u16      TMS9901_ReadCRU(u16 cruAddress, u8 num);
 extern void     TMS9901_ClearJoyKeyData(void);

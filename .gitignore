@@ -5,6 +5,7 @@ fh.log
 *.wav
 *.nsf
 .claude
+bios/
 CMakePresets.json
 /pimoroni-pico/
 # Prerequisites
@@ -398,3 +399,11 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 /.github/chatmodes/
+
+# Host tests for the cassette port
+tools/tapetest/tapetest
+tools/tapetest/sandbox/
+
+# Sample cassette tapes are tracked, unlike the *.wav rule above which is there to
+# keep recordings and audio experiments out.
+!assets/tapes/*.wav

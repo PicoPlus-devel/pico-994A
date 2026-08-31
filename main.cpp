@@ -42,6 +42,7 @@ extern "C"
 #include "cpu/sn76496/sn76496_shim.h"
 #include "disk.h"
 #include "speech.h"
+#include "cassette.h"
 }
 
 // -------------------------------------------------------------------------------------
@@ -100,6 +101,30 @@ const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
     0,                               // YM Audio (SMS only)
     1,                               // Enter bootsel mode
     1,                               // Controller Test
+    0,                               // Recent Games
+    0,                               // USB Drive Mode - not built (FRENS_USB_MSC is off here)
+    1,                               // Cassette CS1/CS2
+};
+
+// -------------------------------------------------------------------------------------
+// Cassette deck, exposed to the shared settings menu through the same hook mechanism the
+// NES build uses for FDS disk swapping. The menu's mode numbering is TapeMode's, so the
+// wrappers exist only to match the hook signatures exactly.
+// -------------------------------------------------------------------------------------
+static int  cassette_hook_mode()                                     { return (int)cassette_mode(); }
+static int  cassette_hook_exists(const char *name, int mode)         { return cassette_name_exists(name, (TapeMode)mode); }
+static int  cassette_hook_commit(int index, int mode, const char *n) { return cassette_commit(index, (TapeMode)mode, n); }
+
+static const MenuCassetteHooks cassetteHooks = {
+    cassette_num_tapes,
+    cassette_tape_name,
+    cassette_selected,
+    cassette_hook_mode,
+    cassette_default_name,
+    cassette_hook_exists,
+    cassette_hook_commit,
+    cassette_rewind,
+    cassette_refresh_list,
 };
 
 // 256x192 is a 4:3 picture already; the 8:7 modes would stretch it wrongly.
@@ -127,6 +152,21 @@ extern "C" void *ti99_psram_alloc(size_t size)
 }
 
 extern "C" void ti99_psram_free(void *p)
+{
+    if (p) Frens::f_free(p);
+}
+
+// -------------------------------------------------------------------------------------
+// Preferred-PSRAM allocation: PSRAM when the board has it, SRAM otherwise. Used for the
+// buffers the machine cannot run without, so no board is excluded - unlike
+// ti99_psram_alloc above, which returns NULL to gate optional features off.
+// -------------------------------------------------------------------------------------
+extern "C" void *ti99_mem_alloc(size_t size)
+{
+    return Frens::f_malloc(size);
+}
+
+extern "C" void ti99_mem_free(void *p)
 {
     if (p) Frens::f_free(p);
 }
@@ -259,6 +299,12 @@ static inline int16_t apply_dvi_gain_i32(int x)
 }
 
 static s16 audioFrameBuf[TI99_AUDIO_SAMPLE_RATE / 50 + 2];   // worst case is PAL (882)
+static s16 tapeFrameBuf[TI99_AUDIO_SAMPLE_RATE / 50 + 2];    // cassette monitor, same shape
+
+// How loud the tape sits in the mix, as a fraction of full scale in Q15. About -20dB,
+// which is roughly where the speech synthesiser sits - audible as feedback without
+// eating the headroom the PSG needs.
+#define TAPE_MONITOR_LEVEL  3200
 
 // -------------------------------------------------------------------------------------
 // The Speech Synthesizer runs its filter at 8kHz, so its output is stepped through with
@@ -311,6 +357,20 @@ static void __not_in_flash_func(process_audio_frame)(void)
     {
         speechPhase = 0;
         speechPrev = speechNext = 0;
+    }
+
+    // Cassette monitor. On a real console the DSR opens the audio gate during a load,
+    // which is why you hear the tape through the TV - and it is the only sign a cassette
+    // load gives that it is getting anywhere. Kept well down: the 4x output gain leaves
+    // little headroom (see CHANGELOG), and during a load the PSG is silent anyway.
+    if (cassette_monitor_active())
+    {
+        cassette_monitor_fill(tapeFrameBuf, samples);
+        for (int i = 0; i < samples; i++)
+        {
+            int t = ((int)tapeFrameBuf[i] * TAPE_MONITOR_LEVEL) >> 15;
+            audioFrameBuf[i] = mix_clamp(audioFrameBuf[i], t);
+        }
     }
 
 #if HSTX
@@ -717,6 +777,16 @@ static void processPerFrame(void)
             ti99_load_cart(p, 0, err, sizeof(err));
         }
     }
+
+    // The console has asked for a tape it has not got. SAVE CS1 and OLD CS1 name no
+    // file, so this is the only moment the choice can be made - and it is the same
+    // moment the console is telling the user to press RECORD or PLAY.
+    int tapeReq = cassette_pending_request();
+    if (tapeReq)
+    {
+        cassette_clear_request();
+        menuCassettePrompt(tapeReq == TAPE_REQ_RECORD);
+    }
 }
 
 // =====================================================================================
@@ -788,6 +858,7 @@ int main()
 
     g_settings_visibility    = g_settings_visibility_ti99;
     g_available_screen_modes = g_available_screen_modes_ti99;
+    menuSetCassetteHooks(&cassetteHooks);
     if (!g_available_screen_modes[static_cast<int>(settings.screenMode)])
         settings.screenMode = ScreenMode::NOSCANLINE_1_1;
     scaleMode8_7_ = Frens::applyScreenMode(settings.screenMode);
@@ -872,7 +943,9 @@ int main()
         {
             processPerFrame();                  // pace to vsync, then run the frame
             while (LoopTMS9900()) { }           // one frame of CPU + VDP, rendering as it goes
+            cassette_frame_tick();              // tape prefetch / flush - the only SD access
             process_audio_frame();
+            SpeechTraceTick();                  // no-op unless -DTI99_SPEECH_TRACE
         }
 
         // Back to the menu: release the machine so RomLister and the artwork loader
