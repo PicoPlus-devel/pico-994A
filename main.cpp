@@ -659,6 +659,22 @@ static void update_ti_joysticks(void)
 
         if (i == 0)
         {
+            // -------------------------------------------------------------------------
+            // Nearly every TI cartridge comes up on a master title screen asking for a
+            // number - "1 FOR TI BASIC", "2 FOR PARSEC" and so on - so a gamepad alone
+            // cannot get into a game. Put those two keys on SELECT and START.
+            //
+            // Both buttons are also modifiers for the emulator's own shortcuts, so only
+            // send the keypress when the button is on its own: SELECT pairs with START
+            // and the d-pad, START pairs with SELECT, A and left/right. Without this
+            // guard, opening the settings menu would type a 1 into the running game.
+            // -------------------------------------------------------------------------
+            if ((v & SELECT) && !(v & (START | UP | DOWN | LEFT | RIGHT)))
+                tms9901.Keyboard[TMS_KEY_1] = 1;
+
+            if ((v & START) && !(v & (SELECT | A | LEFT | RIGHT)))
+                tms9901.Keyboard[TMS_KEY_2] = 1;
+
             // Reboot to BOOTSEL mode
             if ((v & (SELECT | START | UP | A)) == (SELECT | START | UP | A))
                 reset_usb_boot(0, 0);
