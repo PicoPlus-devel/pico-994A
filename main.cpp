@@ -104,6 +104,7 @@ const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
     0,                               // Recent Games
     0,                               // USB Drive Mode - not built (FRENS_USB_MSC is off here)
     1,                               // Cassette CS1/CS2
+    1,                               // Disk DSK1/2/3 (shows N/A without the disk DSR)
 };
 
 // -------------------------------------------------------------------------------------
@@ -125,6 +126,256 @@ static const MenuCassetteHooks cassetteHooks = {
     cassette_hook_commit,
     cassette_rewind,
     cassette_refresh_list,
+};
+
+// -------------------------------------------------------------------------------------
+// Disk drives, exposed to the settings menu through the same mechanism.
+//
+// Images sitting next to a cartridge are still auto-mounted by name when it loads (see
+// ti99_mount_matching_disks). This is the other half: a folder of loose .dsk images that
+// can be put into any drive while the machine is running. TI BASIC needs it most - it
+// boots with no cartridge, so there is no name for anything to be auto-mounted against.
+// -------------------------------------------------------------------------------------
+#define DISK_DIR            "/saves/ti99/disks"
+#define DISK_MAX_NAME       25          // 24 characters plus the terminator
+#define DISK_MAX_LISTED     64          // images offered in the menu
+
+typedef struct { char name[DISK_MAX_NAME]; } DiskEntry;
+
+static DiskEntry *diskList  = nullptr;  // allocated on first use, then kept
+static int        diskCount = 0;
+
+// f_mkdir answers FR_EXIST when the directory is already there, so each level can just
+// be asked for unconditionally - same shape as the tape folder.
+static void ensure_disk_dir(void)
+{
+    f_mkdir("/saves");
+    f_mkdir("/saves/ti99");
+    f_mkdir(DISK_DIR);
+}
+
+static bool name_is_dsk(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot && strcasecmp(dot, ".dsk") == 0;
+}
+
+static void disk_refresh_list(void)
+{
+    ensure_disk_dir();
+
+    if (!diskList)
+    {
+        diskList = (DiskEntry *)malloc(sizeof(DiskEntry) * DISK_MAX_LISTED);
+        if (!diskList) { diskCount = 0; return; }
+    }
+    diskCount = 0;
+
+    DIR dir;
+    if (f_opendir(&dir, DISK_DIR) != FR_OK) return;
+
+    FILINFO fno;
+    while (diskCount < DISK_MAX_LISTED)
+    {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
+        if (fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+        if (!name_is_dsk(fno.fname)) continue;
+
+        // Skip rather than truncate: a shortened name would list fine and then fail to
+        // open, which is a worse outcome than not offering it.
+        if (strlen(fno.fname) >= DISK_MAX_NAME)
+        {
+            printf("[ti99] disk: ignoring %s (name longer than %d characters)\n",
+                   fno.fname, DISK_MAX_NAME - 1);
+            continue;
+        }
+
+        snprintf(diskList[diskCount++].name, DISK_MAX_NAME, "%s", fno.fname);
+    }
+    f_closedir(&dir);
+}
+
+static int         disk_hook_num_drives()      { return MAX_DSKS; }
+static int         disk_hook_num_images()      { return diskCount; }
+static const char *disk_hook_image_name(int i) { return (i >= 0 && i < diskCount) ? diskList[i].name : ""; }
+
+static const char *disk_hook_mounted_name(int drive)
+{
+    if (drive < 0 || drive >= MAX_DSKS || !Disk[drive].isMounted) return nullptr;
+    return Disk[drive].filename;
+}
+
+// index -1 ejects. disk_mount() announces a failure only by printing onto the emulated
+// screen, which is behind the menu, so the outcome is read back from isMounted and
+// returned for the menu to report.
+static int disk_hook_mount(int drive, int index)
+{
+    if (drive < 0 || drive >= MAX_DSKS) return -1;
+
+    if (index < 0)
+    {
+        disk_unmount((u8)drive);
+        return 0;
+    }
+    if (index >= diskCount || !diskList) return -1;
+
+    // disk_mount() takes both halves writable, so hand it copies rather than literals.
+    char dir[] = DISK_DIR;
+    char name[DISK_MAX_NAME];
+    snprintf(name, sizeof(name), "%s", diskList[index].name);
+
+    disk_mount((u8)drive, dir, name);
+    return Disk[drive].isMounted ? 0 : -1;
+}
+
+// -------------------------------------------------------------------------------------
+// Making a blank disk.
+//
+// disk.c has a disk_create_blank() of its own, but it writes a fixed BLANK_A..Z.DSK name
+// into FatFS's current directory - and this port deliberately never sets one, building
+// absolute paths instead - so the image is built here.
+//
+// A v9t9 image is just the sectors, so formatting is sector 0 (the volume header and the
+// allocation bitmap), sector 1 (the file index, empty), and 0xE5 to the end. The geometry
+// below is 360K DSDD: 1440 sectors, 40 tracks, 18 sectors per track, two sides. That is
+// the largest the TI Disk Controller DSR handles and the largest disk.c accepts
+// (MAX_DSK_SECTORS), so it is the one size worth offering.
+// -------------------------------------------------------------------------------------
+#define DISK_NEW_SECTORS    1440        // 360 KB
+#define DISK_NEW_BYTES      (DISK_NEW_SECTORS * 256)
+
+// TI volume names are upper case and hold no spaces or dots. Anything else the user types
+// becomes an underscore rather than being rejected - the name is a label, not a key.
+static void disk_sanitise_name(char *dst, size_t dstsize, const char *src)
+{
+    size_t n = 0;
+    for (; src && *src && n < dstsize - 1; src++)
+    {
+        char c = *src;
+        if (c >= 'a' && c <= 'z') c -= 32;
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        dst[n++] = ok ? c : '_';
+    }
+    dst[n] = 0;
+    if (n == 0) snprintf(dst, dstsize, "NEWDISK");
+}
+
+static void disk_image_path(char *dst, size_t dstsize, const char *name)
+{
+    snprintf(dst, dstsize, "%s/%s.dsk", DISK_DIR, name);
+}
+
+// Pre-fills the name field with the first DISKnn nobody has used yet, which is also the
+// name that gets used as-is when there is no keyboard to edit it with.
+static void disk_hook_default_name(char *buf, size_t n)
+{
+    ensure_disk_dir();
+    for (int i = 1; i < 100; i++)
+    {
+        char cand[DISK_LABEL_MAX];
+        snprintf(cand, sizeof(cand), "DISK%02d", i);
+
+        char path[MAX_PATH];
+        disk_image_path(path, sizeof(path), cand);
+
+        FILINFO fno;
+        if (f_stat(path, &fno) != FR_OK) { snprintf(buf, n, "%s", cand); return; }
+    }
+    snprintf(buf, n, "NEWDISK");
+}
+
+static int disk_hook_name_exists(const char *name)
+{
+    char clean[DISK_LABEL_MAX];
+    disk_sanitise_name(clean, sizeof(clean), name);
+
+    char path[MAX_PATH];
+    disk_image_path(path, sizeof(path), clean);
+
+    FILINFO fno;
+    return (f_stat(path, &fno) == FR_OK) ? 1 : 0;
+}
+
+// Formats a blank image, rescans, and answers with its place in the list so the menu can
+// put it straight into the drive. -1 if anything went wrong.
+static int disk_hook_create(const char *name)
+{
+    char clean[DISK_LABEL_MAX];
+    disk_sanitise_name(clean, sizeof(clean), name);
+
+    ensure_disk_dir();
+
+    char path[MAX_PATH];
+    disk_image_path(path, sizeof(path), clean);
+
+    FIL fil;
+    if (f_open(&fil, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return -1;
+
+    u8  sector[256];
+    UINT bw;
+    bool ok = true;
+
+    // --- sector 0: volume header --------------------------------------------------
+    memset(sector, 0x00, sizeof(sector));
+    memset(sector, ' ', 10);                                // name, space padded to 10
+    memcpy(sector, clean, strlen(clean) > 10 ? 10 : strlen(clean));
+    sector[10] = (DISK_NEW_SECTORS >> 8) & 0xFF;            // total sectors, big endian
+    sector[11] = DISK_NEW_SECTORS & 0xFF;
+    sector[12] = 18;                                        // sectors per track
+    sector[13] = 'D'; sector[14] = 'S'; sector[15] = 'K';
+    sector[16] = ' ';                                       // not write protected
+    sector[17] = 40;                                        // tracks per side
+    sector[18] = 2;                                         // sides
+    sector[19] = 2;                                         // double density
+
+    // Allocation bitmap from byte 0x38, one bit per sector, lowest sector in the low bit.
+    // Sectors 0 and 1 are the header and the file index, so they are taken from the
+    // start; the tail past the last real sector is filled in so nothing is handed out.
+    sector[0x38] = 0x03;
+    for (size_t i = 0x38 + (DISK_NEW_SECTORS / 8); i < sizeof(sector); i++) sector[i] = 0xFF;
+
+    if (f_write(&fil, sector, sizeof(sector), &bw) != FR_OK || bw != sizeof(sector)) ok = false;
+
+    // --- sector 1: file descriptor index, empty -----------------------------------
+    memset(sector, 0x00, sizeof(sector));
+    if (ok && (f_write(&fil, sector, sizeof(sector), &bw) != FR_OK || bw != sizeof(sector))) ok = false;
+
+    // --- the rest: 0xE5, which is what an unwritten TI sector reads as -------------
+    memset(sector, 0xE5, sizeof(sector));
+    for (int i = 2; ok && i < DISK_NEW_SECTORS; i++)
+    {
+        if (f_write(&fil, sector, sizeof(sector), &bw) != FR_OK || bw != sizeof(sector)) ok = false;
+    }
+    f_close(&fil);
+
+    if (!ok)
+    {
+        f_unlink(path);                 // a half written image is worse than none
+        printf("[ti99] disk: could not write %s\n", path);
+        return -1;
+    }
+    printf("[ti99] disk: created %s (%d sectors)\n", path, DISK_NEW_SECTORS);
+
+    disk_refresh_list();
+    for (int i = 0; i < diskCount; i++)
+    {
+        const char *dot = strrchr(diskList[i].name, '.');
+        size_t stem = dot ? (size_t)(dot - diskList[i].name) : strlen(diskList[i].name);
+        if (stem == strlen(clean) && strncasecmp(diskList[i].name, clean, stem) == 0) return i;
+    }
+    return -1;
+}
+
+static const MenuDiskHooks diskHooks = {
+    disk_hook_num_drives,
+    disk_hook_num_images,
+    disk_hook_image_name,
+    disk_hook_mounted_name,
+    disk_hook_mount,
+    disk_refresh_list,
+    disk_hook_default_name,
+    disk_hook_name_exists,
+    disk_hook_create,
 };
 
 // 256x192 is a 4:3 picture already; the 8:7 modes would stretch it wrongly.
@@ -438,17 +689,46 @@ static void __not_in_flash_func(process_audio_frame)(void)
 // combinations. All 48 are mapped directly below; on top of that, keys a PC keyboard
 // has but the TI does not (arrows, backspace, delete, escape, function keys, minus)
 // are synthesised as the FCTN/SHIFT combination a TI user would type.
+//
+// The console settles what each combination produces, and says so in its own GROM: three
+// 48-byte translation tables sit at 0x1700 (plain), 0x1730 (SHIFT) and 0x1760 (FCTN) in
+// 994aGROM.bin, one entry per key in scan order. That is the reference for everything
+// below - the TI Extended BASIC manual in assets/ is not, since it documents the earlier
+// TI-99/4, which had no FCTN key and put the cursor keys on SHIFT.
 // =====================================================================================
 
 // A TI keypress, optionally with a modifier the TI itself would require.
 struct TIKeyCombo
 {
-    u8 key;
-    u8 modifier;    // TMS_KEY_NONE, TMS_KEY_FUNCTION or TMS_KEY_SHIFT
+    u8   key;
+    u8   modifier = TMS_KEY_NONE;   // TMS_KEY_NONE, TMS_KEY_FUNCTION or TMS_KEY_SHIFT
+    bool exact    = false;          // modifier above is the whole story: do not also pass
+                                    // through the SHIFT the user is physically holding
 };
 
-static TIKeyCombo hidKeyToTIKey(uint8_t hid)
+static TIKeyCombo hidKeyToTIKey(uint8_t hid, bool shifted)
 {
+    // A PC keyboard reaches these with SHIFT; the TI keeps them on the FCTN layer of a
+    // different key entirely, so the scancode alone cannot say which character is meant.
+    // They are marked exact because the TI wants FCTN+key and nothing else - leaking the
+    // held SHIFT through as well is what used to turn '"' back into FCTN+O, an
+    // apostrophe. Everything a US keyboard and the TI shift alike (!@#$%^&*() : < > +)
+    // falls through to the plain mapping below and needs nothing special.
+    if (shifted)
+    {
+        switch (hid)
+        {
+            case HID_KEY_APOSTROPHE:    return {TMS_KEY_P, TMS_KEY_FUNCTION, true}; // '"' is FCTN+P
+            case HID_KEY_MINUS:         return {TMS_KEY_U, TMS_KEY_FUNCTION, true}; // '_' is FCTN+U
+            case HID_KEY_BRACKET_LEFT:  return {TMS_KEY_F, TMS_KEY_FUNCTION, true}; // '{' is FCTN+F
+            case HID_KEY_BRACKET_RIGHT: return {TMS_KEY_G, TMS_KEY_FUNCTION, true}; // '}' is FCTN+G
+            case HID_KEY_BACKSLASH:     return {TMS_KEY_A, TMS_KEY_FUNCTION, true}; // '|' is FCTN+A
+            case HID_KEY_SLASH:         return {TMS_KEY_I, TMS_KEY_FUNCTION, true}; // '?' is FCTN+I
+            case HID_KEY_GRAVE:         return {TMS_KEY_W, TMS_KEY_FUNCTION, true}; // '~' is FCTN+W
+            default: break;
+        }
+    }
+
     switch (hid)
     {
         // --- letters ---------------------------------------------------------------
@@ -534,6 +814,7 @@ static TIKeyCombo hidKeyToTIKey(uint8_t hid)
         case HID_KEY_BRACKET_LEFT:  return {TMS_KEY_R,      TMS_KEY_FUNCTION}; // '[' is FCTN+R
         case HID_KEY_BRACKET_RIGHT: return {TMS_KEY_T,      TMS_KEY_FUNCTION}; // ']' is FCTN+T
         case HID_KEY_BACKSLASH:     return {TMS_KEY_Z,      TMS_KEY_FUNCTION}; // '\\' is FCTN+Z
+        case HID_KEY_GRAVE:         return {TMS_KEY_C,      TMS_KEY_FUNCTION}; // '`' is FCTN+C
 
         default:                    return {TMS_KEY_NONE, TMS_KEY_NONE};
     }
@@ -551,15 +832,18 @@ static void update_ti_keyboard(void)
 
     const auto &kb = io::getCurrentKeyboardState();
 
-    // Modifiers the user is physically holding.
-    if (kb.modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT))
-        tms9901.Keyboard[TMS_KEY_SHIFT] = 1;
+    // Modifiers the user is physically holding. SHIFT is held back until the keys have
+    // been looked at: a key that resolves to an exact TI combination supplies its own
+    // modifier and must not have the held SHIFT added on top.
+    bool shiftHeld = (kb.modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT)) != 0;
+
     if (kb.modifier & (KEYBOARD_MODIFIER_LEFTCTRL | KEYBOARD_MODIFIER_RIGHTCTRL))
         tms9901.Keyboard[TMS_KEY_CONTROL] = 1;
     if (kb.modifier & (KEYBOARD_MODIFIER_LEFTALT | KEYBOARD_MODIFIER_RIGHTALT))
         tms9901.Keyboard[TMS_KEY_FUNCTION] = 1;
 
-    bool capsDown = false;
+    bool capsDown      = false;
+    bool suppressShift = false;
     for (int i = 0; i < 6; i++)
     {
         uint8_t hid = kb.keycode[i];
@@ -567,13 +851,16 @@ static void update_ti_keyboard(void)
 
         if (hid == HID_KEY_CAPS_LOCK) { capsDown = true; continue; }
 
-        TIKeyCombo k = hidKeyToTIKey(hid);
+        TIKeyCombo k = hidKeyToTIKey(hid, shiftHeld);
         if (k.key != TMS_KEY_NONE)
         {
             tms9901.Keyboard[k.key] = 1;
             if (k.modifier != TMS_KEY_NONE) tms9901.Keyboard[k.modifier] = 1;
+            if (k.exact) suppressShift = true;
         }
     }
+
+    if (shiftHeld && !suppressShift) tms9901.Keyboard[TMS_KEY_SHIFT] = 1;
 
     if (capsDown && !capsWasDown) alphaLock = !alphaLock;
     capsWasDown = capsDown;
@@ -928,6 +1215,10 @@ int main()
             selectedRom[0] = 0;
             continue;
         }
+
+        // 994aDISK.bin is loaded into PSRAM, so a board without it has no disk controller
+        // to offer. Leaving the hooks null is what makes the menu show the row as N/A.
+        menuSetDiskHooks(ti99_disk_dsr_available() ? &diskHooks : nullptr);
 
         const char *cartPath = is_tibasic_selection(selectedRom) ? nullptr : selectedRom;
         if (ti99_load_cart(cartPath, 1, ErrorMessage, 40) != 0)

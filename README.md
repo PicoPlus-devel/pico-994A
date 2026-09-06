@@ -34,8 +34,9 @@ This project is part of a family of Raspberry Pi Pico emulator projects:
 - **Two joystick ports** - USB gamepads, plus GPIO NES/SNES pads and Wii controllers.
 - **Cartridges from SD card** - `.rpk` Rom PacKs and the classic C/D/G/8/9/0 `.bin` sets.
 - **TI BASIC** - built into the console GROMs; see [TI BASIC](#ti-basic) below.
-- **Disk controller** - DSK1, DSK2 and DSK3 against `.DSK` sector images, read and write.
-  Needs a board with PSRAM (see [Memory](#memory)).
+- **Disk controller** - DSK1, DSK2 and DSK3 against `.DSK` sector images, read and write,
+  mounted beside the cartridge or chosen from the menu. Needs a board with PSRAM (see
+  [Memory](#memory)).
 - **SAMS memory expansion** - 1 MB to 8 MB on boards with PSRAM fitted.
 - **Speech Synthesizer** - real LPC synthesis of the TMS5200, not sampled playback.
   See [Speech](#speech) below.
@@ -167,20 +168,116 @@ Any `.tib` file works the same way - the name is yours to choose, the content is
 ## Disks
 
 With `994aDISK.bin` present, DSK1-3 answer as a standard TI Disk Controller against
-360 KB `.DSK` sector images (v9t9 format).
+360 KB `.DSK` sector images (v9t9 format). There are two ways to get a disk into a drive.
 
-Disks sitting next to a cartridge are mounted automatically: for `GAME.bin` the emulator
-looks for `GAME1.dsk`, `GAME2.dsk` and `GAME3.dsk`.
+**Automatically, from beside the cartridge.** For `GAME.bin` the emulator looks for
+`GAME1.dsk`, `GAME2.dsk` and `GAME3.dsk` in the same folder and mounts whichever of them
+it finds as DSK1, DSK2 and DSK3.
 
-From TI BASIC this gives you somewhere to keep your programs:
+**By hand, from the settings menu.** Put loose images in `/saves/ti99/disks/` and open the
+settings menu while a machine is running (SELECT + START). The `Disk` entry addresses one
+drive at a time:
 
-```
-SAVE DSK1.MYPROG
-OLD DSK1.MYPROG
-```
+| Key | What it does |
+|-----|--------------|
+| LEFT / RIGHT | step between `Disk DSK1`, `Disk DSK2` and `Disk DSK3` |
+| `A` | open the list of images for the drive shown |
+| UP / DOWN | move through the list |
+| `A` | mount the highlighted image, `<no disk>` to eject, or `Create blank disk` |
+| `B` | leave the list without changing anything |
+
+A drive keeps its disk until you change it or load another cartridge. The entry is offered
+only while a machine is running, since loading a cartridge empties every drive.
+
+### Creating a blank disk
+
+`Create blank disk`, the last line of that list, formats a new image and puts it straight
+into the drive you opened the list from. It asks for a name first, which is written both
+to the file and to the disk's own volume header, so a catalogue reads back the same name
+the menu shows. Without a USB keyboard attached there is nothing to type with, so it
+offers the first unused name instead - `DISK01`, `DISK02` and so on - and asks you to
+confirm that before formatting anything.
+
+The image is 360 KB: 1440 sectors, 40 tracks, 18 sectors per track, double sided and
+double density. That is the largest geometry the TI Disk Controller handles, and writing
+it out takes a second or two on the card.
+
+Nothing else is needed to start using it - a freshly formatted disk is ready for
+`SAVE DSK1.MYPROG`. There is no need to run Disk Manager over it first, since the volume
+header and the empty file index are written as part of formatting.
+
+TI BASIC started from the `.tib` marker boots with no cartridge, so there is no name for
+anything to be auto-mounted against - mount a disk from the settings menu instead.
 
 Sector writes go straight to the card rather than being buffered and written back on
 exit, so pulling the power will not lose a program you just saved.
+
+### Disk commands
+
+A filename is `DSKn.NAME`, where `n` is 1, 2 or 3 and `NAME` is at most ten characters.
+These work in both TI BASIC and TI Extended BASIC:
+
+| Command | What it does |
+|---------|--------------|
+| `OLD DSK1.MYPROG` | load a program into memory |
+| `SAVE DSK1.MYPROG` | save the program in memory |
+| `LIST "DSK1.MYPROG"` | write a listing out as a DIS/VAR 80 text file |
+| `DELETE "DSK1.MYPROG"` | delete a file |
+| `OPEN #1:"DSK1.DATA",INPUT,INTERNAL` | open a data file; `PRINT #1`, `INPUT #1`, `RESTORE #1`, `EOF(1)` and `CLOSE #1` follow as usual |
+| `CALL FILES(n)` | set how many files may be open at once, 1 to 9. Clears the program in memory, so use it first |
+
+TI Extended BASIC adds:
+
+| Command | What it does |
+|---------|--------------|
+| `RUN "DSK1.MYPROG"` | load and run in one step (TI BASIC's `RUN` takes only a line number) |
+| `SAVE DSK1.MYPROG,PROTECTED` | save so the program cannot be listed, edited or re-saved |
+| `SAVE DSK1.MYPROG,MERGE` | save in MERGE format (DIS/VAR 163) instead of a program file |
+| `MERGE DSK1.MYPROG` | merge such a file into the program already in memory |
+| `CALL INIT` / `CALL LOAD("DSK1.OBJ")` / `CALL LINK("START")` | load and call assembly language |
+
+Extended BASIC also runs `DSK1.LOAD` by itself at startup if that program file exists,
+which is how most program disks put up their own menu. That happens when the cartridge
+starts, so a disk mounted from the settings menu afterwards has already missed it - reset
+from the settings menu, or just type `RUN "DSK1.LOAD"`.
+
+### Listing a disk
+
+Neither BASIC has a `CATALOG` command - cataloguing a disk was the job of the Disk Manager
+cartridge. What the disk controller does provide is the directory itself, as a read-only
+file named `DSKn.` with no filename after the dot. Record 0 carries the disk name, its
+size and its free space; each record after that is one file. This program prints a
+catalogue and works in both TI BASIC and Extended BASIC:
+
+```
+100 DIM T$(5)
+110 T$(1)="DIS/FIX"
+120 T$(2)="DIS/VAR"
+130 T$(3)="INT/FIX"
+140 T$(4)="INT/VAR"
+150 T$(5)="PROGRAM"
+160 OPEN #1:"DSK1.",INPUT ,RELATIVE,INTERNAL
+170 INPUT #1:N$,X,TOT,FRE
+180 PRINT "DISK ";N$
+190 PRINT "USED";TOT-FRE;"FREE";FRE
+200 PRINT
+210 FOR I=1 TO 127
+220 INPUT #1:N$,TY,SZ,RL
+230 IF LEN(N$)=0 THEN 290
+240 P$=" "
+250 IF TY>0 THEN 270
+260 P$="P"
+270 PRINT N$;TAB(12);T$(ABS(TY));SZ;P$
+280 NEXT I
+290 CLOSE #1
+```
+
+`TY` is the file type - 1 to 5 as named in `T$` above - and is negative when the file is
+protected, which is what the trailing `P` marks. `SZ` is the size in sectors of 256 bytes.
+
+This works here because the emulator does not intercept disk commands: it traps only the
+controller's read-a-sector and write-a-sector routine, so the real DSR in `994aDISK.bin`
+does the directory work exactly as it would on a real disk controller card.
 
 ## Cassette
 
@@ -191,18 +288,20 @@ SAVE CS1
 OLD CS1
 ```
 
-Tapes live in `/saves/ti99/tapes/` and the deck is in the settings menu (SELECT + START):
+Tapes live in `/saves/ti99/tapes/` and the deck is in the settings menu (SELECT + START).
+The `Cassette` entry shows what is in the deck; press `A` to open the list:
 
-| Setting | What it does |
-|---------|--------------|
-| `Cassette: Empty` | nothing loaded |
-| `Cassette: Play <name>` | that tape is in the deck, wound to the start |
-| `Cassette: Record WAV` | record a new tape as a `.wav` |
-| `Cassette: Record CAS` | record a new tape as a `.cas` |
-| `Cassette: Rewind` | wind the loaded tape back (offered while one is playing) |
+| Entry | What it does |
+|-------|--------------|
+| `<no tape>` | eject, leaving the deck empty |
+| a tape name | put that tape in the deck, wound to the start |
+| `Record (WAV)` | record a new tape as a `.wav` |
+| `Record (CAS)` | record a new tape as a `.cas` |
+| `Rewind` | wind the loaded tape back (offered while one is playing) |
 
-LEFT/RIGHT pick, `A` commits - nothing is opened or created until you press `A`. Use it to
-choose `.cas` instead of `.wav`, to rewind for a second read, or to eject.
+UP/DOWN move through the list, `A` takes the highlighted line and `B` leaves without
+changing anything - nothing is opened or created until you press `A`. Use it to choose
+`.cas` instead of `.wav`, to rewind for a second read, or to eject.
 
 You do not have to visit that menu first, though - the deck follows the console:
 
@@ -351,9 +450,9 @@ other set.
 
 ## Keyboard
 
-A USB keyboard maps onto the TI keyboard directly. Letters, digits, `.` `,` `/` `;` `=`,
-Enter and Space are where you expect, and the shifted number row matches the TI's
-(`!@#$%^&*()`).
+A USB keyboard maps onto the TI keyboard directly. Letters, digits, Enter, Space and
+`.` `,` `/` `;` `=` are where you expect, and the shifted number row matches the TI's
+(`!@#$%^&*()`), as do `:` `<` `>` and `+`.
 
 | PC key | TI equivalent |
 |--------|---------------|
@@ -361,17 +460,52 @@ Enter and Space are where you expect, and the shifted number row matches the TI'
 | Ctrl | **CTRL** |
 | Shift | **SHIFT** |
 | Caps Lock | **ALPHA LOCK** (latching, as on the real machine) |
-| Arrow keys | FCTN + E / S / D / X |
-| Backspace | FCTN + S |
-| Delete / Insert | FCTN + 1 / FCTN + 2 |
-| Escape | FCTN + 9 (BACK) |
-| F1 - F9 | FCTN + 1 - 9 (DEL, INS, ERASE, CLEAR, BEGIN, PROC'D, AID, REDO, BACK) |
-| F10 | FCTN + = (QUIT) |
-| `-` | SHIFT + `/` |
-| `'` `[` `]` `\` | FCTN + O / R / T / Z |
 
-Anything else is reachable by holding Alt (FCTN) or Shift and pressing the TI key, just
-as on the original keyboard.
+### Editing and control keys
+
+| PC key | TI keys | Meaning |
+|--------|---------|---------|
+| Arrow keys | FCTN + E / S / D / X | up / left / right / down |
+| Backspace | FCTN + S | left - the TI has no destructive backspace |
+| Delete | FCTN + 1 | DEL, delete the character under the cursor |
+| Insert | FCTN + 2 | INS, start inserting |
+| Escape | FCTN + 9 | BACK, leave the current activity |
+| F1 - F9 | FCTN + 1 - 9 | DEL, INS, ERASE, CLEAR, BEGIN, PROC'D, AID, REDO, BACK |
+| F10 | FCTN + = | QUIT |
+
+QUIT is not a menu key. It resets the console to the title screen and discards the program
+in memory, exactly as on real hardware.
+
+### Punctuation the TI keeps elsewhere
+
+Both spellings work: type the character as you would on a PC, or as a TI user would with
+FCTN.
+
+| Character | PC | TI |
+|-----------|----|----|
+| `-` | `-` | SHIFT + `/` |
+| `'` | `'` | FCTN + O |
+| `"` | Shift + `'` | FCTN + P |
+| `_` | Shift + `-` | FCTN + U |
+| `?` | Shift + `/` | FCTN + I |
+| `[` `]` | `[` `]` | FCTN + R / T |
+| `{` `}` | Shift + `[` `]` | FCTN + F / G |
+| `\` | `\` | FCTN + Z |
+| `\|` | Shift + `\` | FCTN + A |
+| `` ` `` | `` ` `` | FCTN + C |
+| `~` | Shift + `` ` `` | FCTN + W |
+
+The `-` and `?` rows are worth reading together. On a TI, SHIFT + `/` is the minus sign,
+which is why the question mark had to go somewhere else entirely. Typing `?` the PC way
+gives you `?` as expected, but the TI spelling of it is FCTN + I, not SHIFT + `/`.
+
+FCTN on the remaining keys - B, H, J, K, L, M, N, Q, V, Y, 0, `;`, `.` and `,` - produces
+no character.
+
+These assignments are not guesswork: the console GROM carries three 48-byte key
+translation tables, one each for the plain, SHIFT and FCTN layers, and this table is read
+straight out of them. (The TI Extended BASIC manual in `assets/` is not a guide to them -
+it documents the earlier TI-99/4, which had no FCTN key and put the cursor keys on SHIFT.)
 
 ## Controls
 

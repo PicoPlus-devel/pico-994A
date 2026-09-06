@@ -17,9 +17,14 @@ First working build of the TI-99/4A on RP2350.
 - 256x192 picture centred in the 320x240 active area, with the borders taking the
   backdrop colour from VDP register 7.
 - Full USB keyboard support mapped onto the TI keyboard matrix, including FCTN,
-  CTRL, SHIFT and a latching ALPHA LOCK.
+  CTRL, SHIFT and a latching ALPHA LOCK. Characters a PC types with Shift but the TI
+  keeps elsewhere (`"` `_` `{` `}` `|` `?` `~`) come out right.
 - Two joystick ports from USB gamepads, GPIO NES/SNES pads and Wii controllers.
 - TI BASIC reachable through a `.tib` marker file, created automatically on first run.
+- Disk images kept in `/saves/ti99/disks/` can be put into DSK1, DSK2 or DSK3 from the
+  settings menu while a game is running, as well as being mounted automatically from
+  beside the cartridge. Blank 360 KB disks can be created there too. Tapes are chosen
+  from the same kind of list.
 - Builds for all 11 RP2350 hardware configurations plus the bootloader variant.
 
 ### Memory work needed to fit RP2350
@@ -210,7 +215,8 @@ tick, no buffer, no allocation - and gives exact resolution when there is one.
 Two formats: `.wav` for interoperability (any PCM rate, 8/16-bit, mono/stereo, so real
 cassette dumps load unchanged) and `.cas` for size (one bit per cell, ~170 bytes/second).
 Tapes live in `/saves/ti99/tapes/`; the deck is a settings-menu entry using the same hook
-mechanism the NES build uses for FDS disk swapping.
+mechanism the NES build uses for FDS disk swapping, and opens a list to choose from - the
+same list the disk drives use.
 
 `SAVE CS1` supplies no filename - the device name is all the TI gives, a tape has no
 directory, and nothing in the data carries a name - so recording asks for a label, typed
