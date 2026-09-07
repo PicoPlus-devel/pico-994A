@@ -507,6 +507,149 @@ translation tables, one each for the plain, SHIFT and FCTN layers, and this tabl
 straight out of them. (The TI Extended BASIC manual in `assets/` is not a guide to them -
 it documents the earlier TI-99/4, which had no FCTN key and put the cursor keys on SHIFT.)
 
+### Pasting text over the serial port
+
+Text sent to the board's serial console can be typed into the machine, which is the
+practical way to get a BASIC listing written on a PC into TI BASIC or Extended BASIC
+without typing it twice. Turn **Serial keyboard** on in the settings menu; it is off by
+default and the setting is remembered.
+
+Connect a USB-to-serial adapter to the board's UART pins. On the Adafruit Fruit Jam that
+is GPIO 44 (TX), GPIO 45 (RX) and GND on the 2x16 header - the same pins the emulator
+already prints its startup banner on, so a working banner confirms the wiring.
+
+Any terminal program will do, as long as it is set to **115200 8N1 with software
+(XON/XOFF) flow control** and hardware (RTS/CTS) flow control turned off. With minicom:
+
+```sh
+minicom -b 115200 -D /dev/ttyACM0
+```
+
+then press `Ctrl-A` `O`, choose *Serial port setup*, and use `F` to set **Hardware Flow
+Control** to `No` and `G` to set **Software Flow Control** to `Yes`. Turning hardware flow
+control off matters: it is on by default in minicom, and with the usual three-wire
+TX/RX/GND hookup it leaves CTS unasserted, so nothing you type is sent at all.
+
+picocom takes the same settings on the command line:
+
+```sh
+picocom -b 115200 --flow x /dev/ttyACM0
+```
+
+Or with bash:
+
+```sh
+stty -F /dev/ttyACM0 115200 raw -echo ixon -crtscts
+cat file.bas > /dev/ttyACM0
+```
+
+Both of those flags are easy to lose and neither fails loudly. `raw` implies `-ixon`, so
+`ixon` has to come *after* it or there is no flow control at all. And `raw` leaves `ECHO`
+untouched: with echo on, the host sends whatever the emulator prints straight back to the
+board, which then types it into TI BASIC as though it had been keyed in.
+
+`tools/copybas.sh` sets all of this for you, and is the easier way to do it.
+
+
+The device name depends on the adapter: a Raspberry Pi Debug Probe and other CDC-ACM
+adapters appear as `/dev/ttyACM0`, while FTDI, CP210x and CH340 adapters appear as
+`/dev/ttyUSB0`. On Windows, PuTTY and Tera Term both offer XON/XOFF in their serial
+settings.
+
+Flow control is not optional for anything longer than a few lines. The console accepts
+around twenty characters a second, while the serial port delivers eleven thousand, so the
+emulator holds the sender off with XOFF while the machine catches up and releases it with
+XON. The buffer is 16 KB, and the sender is only held off once three quarters of that is
+in use, so an ordinary listing is taken in one go and never stopped at all - which also
+means it arrives intact on a terminal that ignores XON/XOFF entirely.
+
+That threshold is deliberately high. Stopping a sender that is about to finish can strand
+the last few bytes of the file in its own transmit queue, where they are lost if the
+writing process closes the port while still held off.
+
+If the buffer does overflow, the emulator says so in the terminal rather than letting the
+listing quietly corrupt:
+
+```
+Serial keyboard: input overflow - enable XON/XOFF flow control
+```
+
+At the end of a paste the emulator reports what it saw:
+
+```
+Serial keyboard: 2260 characters received, 2260 typed
+```
+
+If that count is short of the size of the file you sent, the missing characters never
+reached the board and the fault is in the serial link or the sending program, not in the
+emulator's typing.
+
+If your terminal cannot do XON/XOFF at all, configure a per-character sending delay of
+about 50 ms instead.
+
+Typing paces itself against the machine rather than running to a fixed clock: each
+keypress is held until the console has actually scanned the keyboard for it. That matters
+because TI BASIC stops scanning altogether while it tokenises a line and scrolls the
+screen, and anything typed into that window would simply be lost.
+
+Incoming characters are collected by the UART interrupt rather than polled from the
+emulation loop. The loop spends much of each frame waiting for vsync, and the UART's
+32-byte hardware FIFO overruns in under 3 ms at 115200 baud, so a polled reader drops
+whole runs of characters no matter how large the buffer behind it is.
+
+`tools/copybas.sh` sends a listing for you, with the serial port set up correctly:
+
+```sh
+tools/copybas.sh examples/pastetest.bas /dev/ttyACM0
+```
+
+It clears the editor first (a few harmless statements, then `NEW`) so the listing arrives
+in an empty machine, sends the file, and commits the last line. It also prints how long
+the typing is expected to take, which is minutes rather than seconds.
+
+Add `-w` and it waits for the board and checks the result:
+
+```
+$ tools/copybas.sh -w examples/pastetest.bas
+copybas.sh: listing  examples/pastetest.bas - 2030 bytes, 53 lines
+copybas.sh: sending  2115 bytes in all, counting the framing statements
+copybas.sh: expect   about 3m15s of typing
+...
+copybas.sh: board | Serial keyboard: 2115 characters received, 2115 typed
+copybas.sh: all 2115 characters reached the board
+```
+
+The emulator reports its totals on the serial port whenever it finishes typing a paste,
+whether or not this script is listening. A count short of what was sent means those
+characters never reached the board, which is a fault in the serial link or the sending
+program rather than in the emulator's typing.
+
+`examples/pastetest.bas` is a short TI BASIC program for checking all of this. Paste it
+in and type `RUN`: it prints every character the TI keeps on its FCTN and SHIFT layers, so
+anything mistyped is visible on screen, and it ends with `PASTE COMPLETE` so an incomplete
+paste is obvious. It is about 2 KB, which takes roughly three minutes to type in.
+
+Pasting is deliberately limited to text. All 95 printable ASCII characters are covered,
+including the ones the TI keeps on the FCTN layer (`"` `?` `[` `]` `\` `|` `~` `_` `{` `}`
+and `` ` ``), and each is sent with whatever SHIFT or FCTN the console expects. Carriage
+return, line feed and CRLF all produce a single ENTER, a tab becomes a space, and
+backspace maps to FCTN + S. Anything else - arrow keys, function keys, BREAK - is ignored;
+use the USB keyboard for those.
+
+Case is taken from the text itself rather than from ALPHA LOCK, so a listing pastes in as
+written whichever way the ALPHA LOCK key happens to be latched.
+
+To abandon a paste, send Ctrl-C, or simply press a key on the USB keyboard: a real
+keypress always takes the machine back. Switching **Serial keyboard** off does the same.
+
+Abandoning a paste discards the text still queued on the board, and then ignores whatever
+the sender has left in its own transmit queue until the line has been quiet for half a
+second. Without that second step the remains of the abandoned listing would arrive the
+moment flow control was released, and type themselves into the next paste.
+
+Boards that have no serial console at all - Murmulator M1 and M2, and the deprecated
+HW\_CONFIG 11 - do not show the setting.
+
 ## Controls
 
 | Input | Action |

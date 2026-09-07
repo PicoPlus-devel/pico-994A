@@ -73,6 +73,10 @@ typedef struct _TMS9901
     u8      Keyboard[TMS_KEY_MAX];      // Main TI-99/4a Keyboard plus joystick inputs for both P1 and P2
     u8      PinState[MAX_PINS];         // The state of the 32 PINs
     u8      CapsLock;                   // Set to '1' if the Caps Lock is active
+    u8      KeyColsScanned;             // Bit per keyboard column read since the front end last cleared it.
+                                        // Lets a caller synthesising keypresses tell when the console has
+                                        // actually looked at the matrix: KSCAN sweeps columns 0-5, but stops
+                                        // dead while BASIC tokenises a line or scrolls the screen.
     u8      VDPIntteruptInProcess;      // Set to '1' if the VDP interrupt is in process
     u8      TimerIntteruptInProcess;    // Set to '1' if the Timer interrupt is in process
     u32     TimerStart;                 // The Starting value
@@ -82,6 +86,12 @@ typedef struct _TMS9901
 } TMS9901;
 
 extern TMS9901 tms9901;
+
+// The 8x8 key matrix the CRU read decodes through: TIKeys[row][column] holds the
+// TMS_KEY_* at that position. Exposed so callers that synthesise keypresses can walk
+// it - the console GROM's own translation tables are indexed by matrix position, not
+// by TMS_KEY_*, so turning a character back into a key needs this.
+extern const u8 TIKeys[8][8];
 
 extern void     TMS9901_Reset(void);
 extern void     TMS9901_TimerSnapshot(void);

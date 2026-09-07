@@ -17,6 +17,8 @@
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
+#include "hardware/uart.h"
+#include "hardware/irq.h"
 #include "ff.h"
 #include "tusb.h"
 
@@ -54,6 +56,15 @@ extern "C"
 #define EMULATOR_CLOCKFREQ_KHZ 252000
 
 #define AUDIOBUFFERSIZE 1024
+
+// The serial keyboard reads the stdio console, so it exists only on boards that have one.
+// The SDK defines LIB_PICO_STDIO_UART when pico_enable_stdio_uart() is on, which tracks
+// UART_ENABLED in BoardConfigs.cmake (off for HW_CONFIG 11, 12 and 13).
+#ifdef LIB_PICO_STDIO_UART
+#define SERIAL_KEYBOARD_AVAILABLE 1
+#else
+#define SERIAL_KEYBOARD_AVAILABLE 0
+#endif
 
 #ifndef DVI_AUDIO_GAIN_Q8
 #define DVI_AUDIO_GAIN_Q8 1024
@@ -105,6 +116,7 @@ const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
     0,                               // USB Drive Mode - not built (FRENS_USB_MSC is off here)
     1,                               // Cassette CS1/CS2
     1,                               // Disk DSK1/2/3 (shows N/A without the disk DSR)
+    SERIAL_KEYBOARD_AVAILABLE,       // Serial keyboard - nothing to read from without a UART
 };
 
 // -------------------------------------------------------------------------------------
@@ -868,6 +880,394 @@ static void update_ti_keyboard(void)
 }
 
 // -------------------------------------------------------------------------------------
+// Serial keyboard: paste text straight into TI BASIC over the UART console.
+//
+// Characters arriving on stdin are turned into TI keypresses and held in
+// tms9901.Keyboard[] long enough for the console's KSCAN to notice them, so a BASIC
+// listing pasted into a terminal types itself in.
+//
+// Two rates are in play and they are three orders of magnitude apart: at 115200 baud the
+// UART delivers ~11500 characters a second and the console can absorb about twelve.
+// Everything below exists to bridge that - a ring buffer, XON/XOFF to hold the sender
+// off, and a drain that runs far more often than once a frame.
+//
+// UART only. The native USB port is the *host* port on boards without PIO USB, and USB
+// drive mode already owns the device stack when there is one, so there is no CDC to use.
+// -------------------------------------------------------------------------------------
+#if SERIAL_KEYBOARD_AVAILABLE
+
+// A keypress is held until the console has actually read the columns the key and its
+// modifier sit in - not for a fixed number of frames. KSCAN stops entirely while BASIC
+// tokenises a line or scrolls the screen, and typing into that window is how a paste
+// loses whole lines. Waiting on the columns rather than on a full 0-5 sweep also keeps
+// this working in the split-keyboard scan modes, which never read all six.
+//
+// The timeout is a backstop against software that never scans at all (a game ignoring the
+// keyboard), not a pacing mechanism, so it is deliberately far longer than any scroll.
+// Mid-line characters land reliably on this handshake alone, so these stay tight: making
+// them generous would only halve the paste rate for no gain.
+static constexpr int MIN_HOLD_FRAMES      = 2;
+static constexpr int MIN_GAP_FRAMES       = 1;
+static constexpr int SCAN_TIMEOUT_FRAMES  = 120;
+// The console keeps scanning from its own interrupt while BASIC tokenises a line and
+// scrolls, so a sweep alone does not prove the editor is listening again. Hence a frank
+// minimum here rather than trusting the handshake: this is the one number to raise if a
+// paste still loses the first character of a line.
+static constexpr int ENTER_MIN_GAP_FRAMES = 30;
+
+// After abandoning a paste, ignore everything arriving until the line has been quiet this
+// long. Releasing XOFF lets the host empty a transmit queue that may still hold most of
+// the old file, and without this that stale text simply types itself into the next paste.
+static constexpr uint32_t SERIAL_DISCARD_QUIET_US = 500000;
+
+// Big enough to swallow a whole listing without ever asking the sender to stop. That is
+// the point: XOFF is not free. Stopping a sender that is about to finish can strand the
+// last bytes of the file in its transmit queue, where they are lost if the writing process
+// closes the port while still held off - which is exactly how a paste came to end 20 bytes
+// short of the end. Flow control is kept as a backstop for listings larger than this, but
+// with the threshold high enough that ordinary ones never reach it.
+// Power of two - the ring indices are masked.
+static constexpr unsigned SERIAL_RING_SIZE = 16384;
+static constexpr unsigned SERIAL_XOFF_USED = (SERIAL_RING_SIZE * 3) / 4;  // hold the sender off here
+static constexpr unsigned SERIAL_XON_USED  = SERIAL_RING_SIZE / 4;        // release it once drained to here
+
+static constexpr uint8_t ASCII_ETX  = 0x03;   // Ctrl-C: abandon the paste
+static constexpr uint8_t ASCII_XON  = 0x11;
+static constexpr uint8_t ASCII_XOFF = 0x13;
+
+enum SerialPhase { SERIAL_IDLE, SERIAL_HOLD, SERIAL_GAP };
+
+static uint8_t    serialRing[SERIAL_RING_SIZE];
+// head is advanced by the UART interrupt, tail by the frame loop - single producer,
+// single consumer, and both indices are aligned words, so no locking is needed.
+static volatile unsigned serialHead = 0, serialTail = 0;   // head == tail is empty
+static uint8_t    serialPrevByte = 0;          // interrupt side only
+static volatile bool serialCancelReq = false;  // Ctrl-C seen by the interrupt
+static volatile bool     serialDiscarding = false;  // swallowing the host's leftover queue
+static volatile uint32_t serialDiscardUntil = 0;
+// Counted so a finished paste can report itself. If this total falls short of the file
+// that was sent, the characters were lost in transit and never reached the board at all -
+// which is a different fault from anything the typing side can cause.
+static volatile uint32_t serialRxCount = 0;
+static volatile uint32_t serialLastRxUs = 0;
+static uint32_t serialTypedCount = 0;
+static bool     serialXoffUsed = false;
+static volatile bool serialOverflowed = false;
+static bool       serialOverflowWarned = false;
+static bool       serialXoffSent = false;
+static bool       serialLutReady = false;
+static TIKeyCombo serialAsciiToTI[128];
+static uint8_t    serialKeyColumn[TMS_KEY_MAX];   // matrix column each key sits in
+static uint8_t    serialNeedCols = 0;             // columns the console must read to see the current key
+static TIKeyCombo serialKey;
+static SerialPhase serialPhase = SERIAL_IDLE;
+static int        serialFrames = 0;
+static int        serialGapFrames = 1;   // minimum frames to stay released; longer after ENTER
+
+static inline unsigned serialRingUsed(void) { return (serialHead - serialTail) & (SERIAL_RING_SIZE - 1); }
+static inline unsigned serialRingFree(void) { return SERIAL_RING_SIZE - 1 - serialRingUsed(); }
+
+// The console settles what character each key produces, and says so in its own GROM:
+// three 48-byte tables at 0x1700 (plain), 0x1730 (SHIFT) and 0x1760 (FCTN), one entry per
+// key. They are indexed by matrix position rather than by key - col*8 + (7-row) into
+// TIKeys[row][col] - so reading them backwards gives the character -> keypress mapping the
+// machine itself will honour, which beats maintaining a second copy of it here. Between
+// them the three tables cover every printable ASCII character; filling plain first, then
+// SHIFT, then FCTN resolves each character to the least modifier that produces it.
+static void serialKeyboardBegin(void)
+{
+    memset(serialAsciiToTI, 0, sizeof(serialAsciiToTI));
+    serialLutReady = false;
+    serialPhase    = SERIAL_IDLE;
+    serialFrames   = 0;
+    serialHead = serialTail = 0;
+    serialPrevByte       = 0;
+    serialCancelReq      = false;
+    serialOverflowed     = false;
+    serialOverflowWarned = false;
+    // A cartridge change or reset is a fresh start: swallow anything the sender still has
+    // in flight from before rather than typing it at the new machine.
+    serialDiscardUntil   = time_us_32() + SERIAL_DISCARD_QUIET_US;
+    serialDiscarding     = true;
+    serialRxCount        = 0;
+    serialTypedCount     = 0;
+    serialXoffUsed       = false;
+
+    if (!MemGROM) return;
+
+    // Entries 5 and 6 of the plain table are ENTER and SPACE in every console GROM. If
+    // they are not there this is not a translation table - a cartridge that replaces
+    // console GROM can land here - so stay inert rather than type nonsense at the machine.
+    if (MemGROM[0x1705] != 0x0d || MemGROM[0x1706] != 0x20)
+    {
+        printf("Serial keyboard: no key tables in GROM, disabled\n");
+        return;
+    }
+
+    // Which column each key is wired to, so a synthesised press can tell when the console
+    // has looked at it. Modifiers all live in column 0.
+    memset(serialKeyColumn, 0, sizeof(serialKeyColumn));
+    for (int row = 0; row < 8; row++)
+        for (int col = 0; col < 8; col++)
+            serialKeyColumn[TIKeys[row][col]] = (uint8_t)col;
+
+    static const struct { u16 base; u8 modifier; } tables[] = {
+        {0x1700, TMS_KEY_NONE}, {0x1730, TMS_KEY_SHIFT}, {0x1760, TMS_KEY_FUNCTION},
+    };
+
+    for (const auto &t : tables)
+    {
+        for (int i = 0; i < 48; i++)
+        {
+            u8 key = TIKeys[7 - (i % 8)][i / 8];
+            u8 ch  = MemGROM[t.base + i];
+            if (key == TMS_KEY_NONE || key >= TMS_KEY_JOY1_UP) continue;  // dead cell or a joystick column
+            if (ch < 0x20 || ch > 0x7e) continue;                         // FCTN's edit keys, not characters
+            if (serialAsciiToTI[ch].key != TMS_KEY_NONE) continue;        // a plainer form already claimed it
+            serialAsciiToTI[ch] = {key, t.modifier};
+        }
+    }
+    serialLutReady = true;
+}
+
+static TIKeyCombo serialCharToTIKey(uint8_t c)
+{
+    switch (c)
+    {
+        case '\r':
+        case '\n': return {TMS_KEY_ENTER, TMS_KEY_NONE};
+        case '\t': return {TMS_KEY_SPACE, TMS_KEY_NONE};   // the TI has no tab
+        case 0x08:
+        case 0x7f: return {TMS_KEY_S,     TMS_KEY_FUNCTION};   // FCTN+S is the TI's backspace
+        default:   return (c < 0x80) ? serialAsciiToTI[c] : TIKeyCombo{TMS_KEY_NONE, TMS_KEY_NONE};
+    }
+}
+
+// Drop whatever is queued and let the sender go again.
+static void serialKeyboardCancel(void)
+{
+    serialTail       = serialHead;
+    serialPhase      = SERIAL_IDLE;
+    serialFrames     = 0;
+    serialPrevByte       = 0;
+    serialCancelReq      = false;
+    serialOverflowed     = false;
+    serialOverflowWarned = false;
+
+    // Let the sender go, then throw away whatever it had queued behind the XOFF - that
+    // backlog is the rest of the abandoned paste, not the start of the next one.
+    serialDiscardUntil = time_us_32() + SERIAL_DISCARD_QUIET_US;
+    serialDiscarding   = true;
+    serialRxCount      = 0;
+    serialTypedCount   = 0;
+    serialXoffUsed     = false;
+    if (serialXoffSent) { putchar_raw(ASCII_XON); serialXoffSent = false; }
+}
+
+// Draining the UART has to be interrupt-driven, not polled. The emulation loop is not
+// free-running: hstx_paceFrame() busy-waits for vsync, and because the TMS9900 is slow the
+// emulator reaches that wait early and sits in it for much of every frame. Nothing polled
+// from the main loop runs during that window, and the UART's 32-byte FIFO overruns after
+// 2.8ms at 115200 baud - which is how a paste used to lose contiguous runs of characters
+// while the ring buffer never even filled.
+#ifdef uart_default
+static void __not_in_flash_func(serialUartIrq)(void)
+{
+    while (uart_is_readable(uart_default))
+    {
+        uint8_t c = (uint8_t)uart_get_hw(uart_default)->dr;   // reading DR also clears RX/RT
+
+        if (!settings.flags.serialKeyboard) continue;         // switched off: drain and discard
+        if (c == ASCII_XON || c == ASCII_XOFF) continue;      // flow control aimed at us, not data
+        if (c == ASCII_ETX) { serialCancelReq = true; continue; }
+
+        if (serialDiscarding)
+        {
+            // Still emptying the sender's backlog. Every byte pushes the quiet period out
+            // again, so this ends only once the line has genuinely gone silent.
+            serialDiscardUntil = time_us_32() + SERIAL_DISCARD_QUIET_US;
+            continue;
+        }
+
+        // CRLF is one ENTER, not two: swallow the LF that follows a CR. A lone CR and a
+        // lone LF still end the line, so all three line endings behave alike.
+        bool isLfAfterCr = (c == '\n' && serialPrevByte == '\r');
+        serialPrevByte = c;
+        if (isLfAfterCr) continue;
+
+        unsigned next = (serialHead + 1) & (SERIAL_RING_SIZE - 1);
+        if (next == serialTail) { serialOverflowed = true; continue; }   // full: drop
+        serialRing[serialHead] = c;
+        serialHead = next;
+        serialRxCount++;
+        serialLastRxUs = time_us_32();
+    }
+}
+
+static void serialKeyboardIrqInit(void)
+{
+    // stdio_uart only claims the UART interrupt if a chars-available callback is
+    // registered, and nothing here registers one, so the vector is ours to take. TX is
+    // left alone: printf keeps going through stdio as before.
+    uint irqNum = UART_IRQ_NUM(uart_default);
+    irq_set_exclusive_handler(irqNum, serialUartIrq);
+    irq_set_enabled(irqNum, true);
+    uart_set_irqs_enabled(uart_default, true, false);
+}
+#else
+static void serialKeyboardIrqInit(void) { }   // no default UART instance to listen on
+#endif
+
+// Flow control and housekeeping. Once a frame is plenty now that the interrupt does the
+// draining: the ring holds 4KB and XOFF goes out at half full, so there is ~2KB of slack
+// against a worst case 16.7ms of pacing latency (~192 bytes at 115200 baud).
+static void serialKeyboardPump(void)
+{
+    if (!settings.flags.serialKeyboard)
+    {
+        // Switched off mid-paste: drop what is queued so turning it back on does not
+        // resume a listing the user has finished with.
+        if (serialRingUsed() || serialPhase != SERIAL_IDLE) serialKeyboardCancel();
+        return;
+    }
+
+    // The sender's backlog has stopped arriving, so anything from here on is new.
+    if (serialDiscarding && (int32_t)(time_us_32() - serialDiscardUntil) > 0)
+        serialDiscarding = false;
+
+    if (serialCancelReq)
+    {
+        serialCancelReq = false;
+        serialKeyboardCancel();
+    }
+
+    if (serialOverflowed && !serialOverflowWarned)
+    {
+        // Say so once. Silently dropping input is what turns a paste into a corrupted
+        // listing, and the message lands in the terminal the paste came from.
+        serialOverflowWarned = true;
+        // No echo-swallowing here, unlike the end-of-paste summary: this one is printed
+        // while the paste is still arriving, and discarding half a second of it to dodge
+        // an echo would destroy far more than the echo ever could.
+        printf("\r\nSerial keyboard: input overflow - enable XON/XOFF flow control\r\n");
+    }
+
+    // A paste is over once everything queued has been typed and nothing new has arrived
+    // for a second. Report the total then: set against what was sent, it separates "the
+    // board never received it" from "the board mistyped it". The 100 character floor
+    // keeps the report to actual pastes, but the counters are cleared either way, so a
+    // few stray characters cannot quietly add themselves to the next paste's total.
+    if (serialRxCount && !serialRingUsed() && serialPhase == SERIAL_IDLE &&
+        (int32_t)(time_us_32() - serialLastRxUs) > 1000000)
+    {
+        if (serialRxCount >= 100)
+        {
+            printf("\r\nSerial keyboard: %u characters received, %u typed%s\r\n",
+                   (unsigned)serialRxCount, (unsigned)serialTypedCount,
+                   serialXoffUsed ? " (flow control was used)" : "");
+            // This port is also the keyboard, so anything echoed back - by a host tty with
+            // ECHO left on, or a terminal in local echo - would be typed into the machine
+            // as though it had been keyed in. Swallow our own words.
+            serialDiscardUntil = time_us_32() + SERIAL_DISCARD_QUIET_US;
+            serialDiscarding   = true;
+        }
+        serialRxCount    = 0;
+        serialTypedCount = 0;
+        serialXoffUsed   = false;
+    }
+
+    // Hold the sender off well before the ring fills, release it once the machine has
+    // caught up. The gap between the two thresholds is what stops XON/XOFF chattering.
+    if (!serialXoffSent && serialRingUsed() > SERIAL_XOFF_USED)
+    {
+        putchar_raw(ASCII_XOFF);
+        serialXoffSent = true;
+        serialXoffUsed = true;
+    }
+    else if (serialXoffSent && serialRingUsed() < SERIAL_XON_USED)
+    {
+        putchar_raw(ASCII_XON);
+        serialXoffSent = false;
+    }
+}
+
+// Runs once a frame, straight after update_ti_keyboard() has cleared the matrix, so what
+// is asserted here is what the console scans for the whole of the frame that follows.
+static void serialKeyboardTick(void)
+{
+    if (!settings.flags.serialKeyboard || !serialLutReady) return;
+
+    // A hand on the real keyboard wins: abandon the paste rather than fight it for the
+    // matrix. This is also the way out if a paste goes wrong and no terminal is to hand.
+    const auto &kb = io::getCurrentKeyboardState();
+    if (kb.keycode[0] || kb.modifier)
+    {
+        if (serialPhase != SERIAL_IDLE || serialRingUsed()) serialKeyboardCancel();
+        return;
+    }
+
+    if (serialPhase == SERIAL_IDLE)
+    {
+        TIKeyCombo k{TMS_KEY_NONE, TMS_KEY_NONE};
+        while (serialRingUsed())
+        {
+            uint8_t c = serialRing[serialTail];
+            serialTail = (serialTail + 1) & (SERIAL_RING_SIZE - 1);
+            k = serialCharToTIKey(c);
+            if (k.key != TMS_KEY_NONE) break;   // skip anything the TI has no key for
+        }
+        if (k.key == TMS_KEY_NONE) return;      // ring empty, or held nothing typeable
+
+        serialKey       = k;
+        serialTypedCount++;
+        serialNeedCols  = (uint8_t)(1u << serialKeyColumn[k.key]);
+        if (k.modifier != TMS_KEY_NONE) serialNeedCols |= (uint8_t)(1u << serialKeyColumn[k.modifier]);
+        serialGapFrames = (k.key == TMS_KEY_ENTER) ? ENTER_MIN_GAP_FRAMES : MIN_GAP_FRAMES;
+        serialPhase     = SERIAL_HOLD;
+        serialFrames    = 0;
+        tms9901.KeyColsScanned = 0;   // only reads from here on count as having seen this key
+    }
+
+    // Case comes from SHIFT alone - the plain GROM table is lowercase and the SHIFT table
+    // uppercase - so Alpha Lock must not get a vote, or a pasted lowercase listing would
+    // arrive in capitals whenever the user happens to have it latched down.
+    tms9901.CapsLock = 0;
+
+    // The console has read every column this key needs, so it has seen the press - or,
+    // in the gap, seen the key back up again.
+    bool seen = (tms9901.KeyColsScanned & serialNeedCols) == serialNeedCols;
+    serialFrames++;
+
+    if (serialPhase == SERIAL_HOLD)
+    {
+        if ((seen && serialFrames >= MIN_HOLD_FRAMES) || serialFrames >= SCAN_TIMEOUT_FRAMES)
+        {
+            // Seen. Release it: the console debounces on release, so it will not accept
+            // the same key twice without one sweep showing the key up in between.
+            serialPhase            = SERIAL_GAP;
+            serialFrames           = 0;
+            tms9901.KeyColsScanned = 0;
+            return;
+        }
+        tms9901.Keyboard[serialKey.key] = 1;
+        if (serialKey.modifier != TMS_KEY_NONE) tms9901.Keyboard[serialKey.modifier] = 1;
+    }
+    else if ((seen && serialFrames >= serialGapFrames) || serialFrames >= SCAN_TIMEOUT_FRAMES)
+    {
+        serialPhase  = SERIAL_IDLE;
+        serialFrames = 0;
+    }
+}
+
+#else   // !SERIAL_KEYBOARD_AVAILABLE
+
+static inline void serialKeyboardBegin(void) { }
+static inline void serialKeyboardPump(void)  { }
+static inline void serialKeyboardTick(void)  { }
+
+#endif
+
+// -------------------------------------------------------------------------------------
 // Joysticks. The TI's two joystick ports are scanned as extra keyboard columns, so they
 // land in the same tms9901.Keyboard[] array. USB gamepads take a port each; a GPIO
 // NES/SNES pad or a Wii classic controller feeds whichever port has no USB pad.
@@ -1062,6 +1462,8 @@ static void processPerFrame(void)
 
     update_ti_keyboard();
     update_ti_joysticks();
+    serialKeyboardPump();
+    serialKeyboardTick();   // must follow update_ti_keyboard: it clears the whole matrix
 
     if (showSettings)
     {
@@ -1078,6 +1480,9 @@ static void processPerFrame(void)
             char err[64] = {0};
             const char *p = is_tibasic_selection(romName) ? nullptr : romName;
             ti99_load_cart(p, 0, err, sizeof(err));
+            // Reloading the cart can replace console GROM, and half-typed text from
+            // before the reset is no longer wanted anyway.
+            serialKeyboardBegin();
         }
     }
 
@@ -1143,6 +1548,14 @@ int main()
     ErrorMessage[0] = selectedRom[0] = 0;
 
     Frens::setClocksAndStartStdio(CPUFreqKHz, VREG_VOLTAGE_1_20);
+
+#if SERIAL_KEYBOARD_AVAILABLE && defined(PICO_DEFAULT_UART_RX_PIN)
+    // stdio only ever transmitted, so nothing cared what RX did. The serial keyboard
+    // reads it, and a disconnected input left floating would frame garbage into the
+    // machine - pull it to the idle-high a real sender would hold it at.
+    gpio_pull_up(PICO_DEFAULT_UART_RX_PIN);
+    serialKeyboardIrqInit();
+#endif
 
     printf("==========================================================================================\n");
     printf("pico-994A (TI-99/4A) %s\n", SWVERSION);
@@ -1232,6 +1645,9 @@ int main()
 
         build_palette();
         ti99_psg_init(TI99_AUDIO_SAMPLE_RATE);
+        // After the cart: loading one can replace console GROM, and that is where the
+        // key translation tables the serial keyboard reads live.
+        serialKeyboardBegin();
 
         if (showSplash && !Frens::isPsramEnabled())
         {

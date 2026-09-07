@@ -19,6 +19,10 @@ First working build of the TI-99/4A on RP2350.
 - Full USB keyboard support mapped onto the TI keyboard matrix, including FCTN,
   CTRL, SHIFT and a latching ALPHA LOCK. Characters a PC types with Shift but the TI
   keeps elsewhere (`"` `_` `{` `}` `|` `?` `~`) come out right.
+- Text can be pasted into TI BASIC over the serial port, so a listing written on a PC
+  does not have to be typed in again. Switch **Serial keyboard** on in the settings menu
+  and paste into a terminal set to 115200 baud with XON/XOFF flow control. See the
+  Keyboard section of the README.
 - Two joystick ports from USB gamepads, GPIO NES/SNES pads and Wii controllers.
 - TI BASIC reachable through a `.tib` marker file, created automatically on first run.
 - Disk images kept in `/saves/ti99/disks/` can be put into DSK1, DSK2 or DSK3 from the
