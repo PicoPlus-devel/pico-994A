@@ -62,7 +62,7 @@ Not emulated yet: save states and the p-code card. See [Not yet done](#not-yet-d
 | `994aROM.bin`  | 8 KB  | **yes** | Console ROM |
 | `994aGROM.bin` | 24 KB | **yes** | Console GROMs - TI BASIC and the master title screen live here |
 | `994aDISK.bin` | 8 KB  | no      | TI Disk Controller DSR - needed for DSK1/2/3 |
-| `spchrom.bin`  | 32 KB | no      | Speech Synthesizer resident vocabulary - see [Speech](#speech) |
+| `spchrom.bin`  | 32 KB | no      | Speech Synthesizer resident vocabulary, PSRAM boards only - see [Speech](#speech) |
 
 `/bios/` is searched first, then `/roms/bios/` and `/roms/ti99/`, so an SD card already
 prepared for DS994a works unchanged.
@@ -87,6 +87,10 @@ are picked up automatically from the same folder:
 | `xxx0.bin` | Replaces the console GROMs |
 
 Cartridge ROM up to 64 KB is held in SRAM; anything larger needs a board with PSRAM.
+On a board without PSRAM the console's own 144 KB comes out of that same heap, so the
+practical ceiling there is 32 KB of cartridge ROM - a larger cart is refused with a
+message rather than being loaded into memory that is not there. Cartridge GROM is not
+part of this: it lives in the 64 KB GROM space and is unaffected by the cart size.
 
 ## Making `.rpk` files
 
@@ -428,7 +432,9 @@ Moonmine, Star Trek and the rest talk with no additional files at all.
 `spchrom.bin` in `/bios/` adds the ~32 KB resident vocabulary held in the module's two
 TMS6100 ROMs. That is what TI Extended BASIC's `CALL SAY` and the Terminal Emulator II
 read from. Without it, those fall silent while cartridge speech keeps working. The file
-is only loaded when present, so it costs nothing if you leave it out.
+is only loaded when present, so it costs nothing if you leave it out. Like the disk
+controller DSR it is held in PSRAM, so it is not loaded at all on a board without one
+(see [Memory](#memory)); the module itself still works there.
 
 The LPC bitstream is read **least significant bit first within each byte** - the order
 the TMS6100 shifts its serial data out, and the order cartridge speech data is stored in.
@@ -647,8 +653,12 @@ the sender has left in its own transmit queue until the line has been quiet for 
 second. Without that second step the remains of the abandoned listing would arrive the
 moment flow control was released, and type themselves into the next paste.
 
-Boards that have no serial console at all - Murmulator M1 and M2, and the deprecated
-HW\_CONFIG 11 - do not show the setting.
+The setting only appears on boards that can actually receive. Murmulator M1 and M2 and the
+deprecated HW\_CONFIG 11 have no serial console at all. The Pimoroni Pico DV Demo Base
+(HW\_CONFIG 1) has one, but gives GPIO 1 - which is UART0 RX - to the second NES
+controller's clock, so it can transmit and never receive: `printf` works there and input
+cannot. The build works this out from the board's pin map, so the option is absent rather
+than present and silently inert.
 
 ## Controls
 

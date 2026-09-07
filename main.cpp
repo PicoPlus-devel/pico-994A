@@ -60,8 +60,30 @@ extern "C"
 // The serial keyboard reads the stdio console, so it exists only on boards that have one.
 // The SDK defines LIB_PICO_STDIO_UART when pico_enable_stdio_uart() is on, which tracks
 // UART_ENABLED in BoardConfigs.cmake (off for HW_CONFIG 11, 12 and 13).
-#ifdef LIB_PICO_STDIO_UART
-#define SERIAL_KEYBOARD_AVAILABLE 1
+//
+// Having a console is not sufficient, though. This is the first thing in the project to
+// read the UART's RX pin - stdio only ever transmitted - so a board whose pin map hands
+// that pin to something else has always looked perfectly healthy while being physically
+// incapable of receiving. HW_CONFIG 1 is exactly that: the Pimoroni DV Demo Base puts the
+// second NES controller's clock on GPIO 1, which is UART0 RX, and its own comments say the
+// UART should have been disabled for that reason. TX on GPIO 0 is untouched, so printf
+// keeps working and only input is dead - which is a miserable thing to debug from the far
+// side. Work it out at build time instead and leave the option out where it cannot work.
+#if defined(LIB_PICO_STDIO_UART) && defined(PICO_DEFAULT_UART_RX_PIN)
+#define SERIAL_RX_PIN_CLAIMED (                                                  \
+       PICO_DEFAULT_UART_RX_PIN == NES_PIN_CLK                                   \
+    || PICO_DEFAULT_UART_RX_PIN == NES_PIN_DATA                                  \
+    || PICO_DEFAULT_UART_RX_PIN == NES_PIN_LAT                                   \
+    || PICO_DEFAULT_UART_RX_PIN == NES_PIN_CLK_1                                 \
+    || PICO_DEFAULT_UART_RX_PIN == NES_PIN_DATA_1                                \
+    || PICO_DEFAULT_UART_RX_PIN == NES_PIN_LAT_1                                 \
+    || PICO_DEFAULT_UART_RX_PIN == WII_PIN_SDA                                   \
+    || PICO_DEFAULT_UART_RX_PIN == WII_PIN_SCL                                   \
+    || PICO_DEFAULT_UART_RX_PIN == SDCARD_PIN_CS                                 \
+    || PICO_DEFAULT_UART_RX_PIN == SDCARD_PIN_SCK                                \
+    || PICO_DEFAULT_UART_RX_PIN == SDCARD_PIN_MOSI                               \
+    || PICO_DEFAULT_UART_RX_PIN == SDCARD_PIN_MISO)
+#define SERIAL_KEYBOARD_AVAILABLE (!SERIAL_RX_PIN_CLAIMED)
 #else
 #define SERIAL_KEYBOARD_AVAILABLE 0
 #endif
@@ -116,7 +138,8 @@ const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
     0,                               // USB Drive Mode - not built (FRENS_USB_MSC is off here)
     1,                               // Cassette CS1/CS2
     1,                               // Disk DSK1/2/3 (shows N/A without the disk DSR)
-    SERIAL_KEYBOARD_AVAILABLE,       // Serial keyboard - nothing to read from without a UART
+    SERIAL_KEYBOARD_AVAILABLE,       // Serial keyboard - hidden where the board has no UART
+                                     // console, or gives its RX pin to something else
 };
 
 // -------------------------------------------------------------------------------------
@@ -1549,7 +1572,7 @@ int main()
 
     Frens::setClocksAndStartStdio(CPUFreqKHz, VREG_VOLTAGE_1_20);
 
-#if SERIAL_KEYBOARD_AVAILABLE && defined(PICO_DEFAULT_UART_RX_PIN)
+#if SERIAL_KEYBOARD_AVAILABLE
     // stdio only ever transmitted, so nothing cared what RX did. The serial keyboard
     // reads it, and a disconnected input left floating would frame garbage into the
     // machine - pull it to the idle-high a real sender would hold it at.
