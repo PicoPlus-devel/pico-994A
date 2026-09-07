@@ -36,6 +36,11 @@ void ti99_reset(u8 initDisks);
 int  ti99_disk_dsr_available(void);
 void ti99_mount_matching_disks(const char *cartPath);
 
+// Bytes of SRAM heap still available - the allocator's free list plus the part of the
+// heap sbrk has not handed out yet. The SDK's malloc panics instead of returning NULL,
+// so anything that might not fit has to be checked against this before it is asked for.
+u32  ti99_sram_free(void);
+
 // --- cartridge memory (rpk.c calls these too) ----------------------------------------
 int  ti99_cart_alloc(u32 size);
 void ti99_cart_free(void);

@@ -1158,6 +1158,15 @@ int cassette_commit(int index, TapeMode m, const char *name)
         {
             long sz = ti99_file_size(openPath);
             if (sz <= 0 || sz > TAPE_CAS_MAX) { printf("[ti99] tape: bad .cas size %ld\n", sz); goto fail; }
+            // A .cas is held in RAM whole, up to 64K of it. malloc panics rather than
+            // returning NULL, so the "if (!raw)" below can never run - ask the heap
+            // whether it can take this first.
+            if ((u32)sz + 8192 > ti99_sram_free())
+            {
+                printf("[ti99] tape: %ldK .cas does not fit in free SRAM (%uK)\n",
+                       sz / 1024, (unsigned)(ti99_sram_free() >> 10));
+                goto fail;
+            }
             u8 *raw = (u8 *)malloc((size_t)sz);
             if (!raw) goto fail;
             u32 rawLen = (u32)ti99_fread(raw, 1, (size_t)sz, fp);

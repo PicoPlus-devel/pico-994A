@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <malloc.h>
 
 #include "ti99_compat.h"
 #include "ti99_fileio.h"
@@ -134,6 +135,32 @@ int ti99_alloc_memory(void)
 }
 
 // -------------------------------------------------------------------------------------
+// How much SRAM heap is still available.
+//
+// mallinfo() only describes the arena malloc has already taken from sbrk, so its
+// fordblks alone reads as almost nothing on a board that has not allocated much yet -
+// the rest of the heap is simply not claimed. The part sbrk can still hand out has to
+// be added to it: the heap runs from `end` (first byte above .bss) up to __StackLimit,
+// which is where the SDK's _sbrk stops.
+//
+// This exists because the SDK's malloc **panics** rather than returning NULL. Anything
+// that might not fit has to be checked before it is asked for, not after.
+// -------------------------------------------------------------------------------------
+u32 ti99_sram_free(void)
+{
+    extern char end;            // first byte of the heap  (newlib linker symbol)
+    extern char __StackLimit;   // heap ceiling            (pico-sdk _sbrk)
+
+    struct mallinfo mi = mallinfo();
+
+    u32 capacity = (u32)(&__StackLimit - &end);
+    u32 claimed  = (u32)mi.arena;               // already taken from sbrk
+    u32 unclaimed = (capacity > claimed) ? (capacity - claimed) : 0;
+
+    return unclaimed + (u32)mi.fordblks;        // never handed out + free in the arena
+}
+
+// -------------------------------------------------------------------------------------
 // Cartridge memory. Sized to the cart rather than upstream's fixed 512K/8MB, and kept
 // in SRAM while it fits - tms9900.cartBankPtr points straight into it and every fetch
 // from >6000 reads through it, so it is hot. Oversized carts go to PSRAM if fitted.
@@ -141,6 +168,13 @@ int ti99_alloc_memory(void)
 // Above this a cart goes to PSRAM instead. Sized so a large cart cannot squeeze out
 // the ~200K the rest of the machine needs; the great majority of TI carts are 8-32K.
 #define CART_SRAM_LIMIT   (64 * 1024)
+
+// What has to stay free after the cart is in. On a board with no PSRAM the two 64K
+// address spaces and the 16K of video RAM come out of the same heap, so this is what
+// separates "tight" from "the next allocation kills the board": the settings menu's
+// screen buffer (~4K), the tape and disk listers (~4K), the tape I/O buffer (4K), FatFS
+// handles and stdio buffers, plus slack.
+#define CART_SRAM_RESERVE (24 * 1024)
 
 // The SDK's malloc panics rather than returning NULL when it cannot satisfy a request,
 // so "try SRAM, fall back to PSRAM" is not a thing that can work - the fallback is
@@ -178,18 +212,26 @@ int ti99_cart_alloc(u32 size)
     while (pow2 < banks) pow2 <<= 1;
     size = pow2 * 0x2000;
 
-    if (size <= CART_SRAM_LIMIT)
+    // Inside the budget *and* actually there. The limit on its own is not enough on a
+    // board with no PSRAM: MemCPU, MemGROM and the video RAM are 144K of the same heap,
+    // so what is left over is around 110K, and the framework holds some of that. Asking
+    // for a cart that does not fit panics instead of failing, so the heap is measured
+    // first and the request only made when it can be met.
+    u32 freeSram = ti99_sram_free();
+    if (size <= CART_SRAM_LIMIT && (size + CART_SRAM_RESERVE) <= freeSram)
     {
-        // Inside the budget the rest of the machine leaves free.
         MemCART = (u8 *)malloc(size);
         cartInPsram = 0;
     }
     else
     {
-        // Too big for the SRAM budget: this needs PSRAM, and asking without it would
-        // panic rather than fail, so check first and report a real error instead.
+        // Too big for the SRAM budget, or there is not enough of it left: this needs
+        // PSRAM, and ti99_psram_alloc answers NULL rather than panicking without it.
         MemCART = (u8 *)ti99_psram_alloc(size);
         cartInPsram = (MemCART != NULL);
+        if (!MemCART)
+            printf("[ti99] cart needs %uK, only %uK of SRAM free and no PSRAM\n",
+                   (unsigned)(size >> 10), (unsigned)(freeSram >> 10));
     }
     if (!MemCART) return -1;
 
@@ -329,6 +371,7 @@ int ti99_load_bios(char *errorMessage, size_t errorMessageSize)
     else
     {
         SpeechSetROM(NULL, 0);          // no PSRAM: cartridge speech only
+        printf("[ti99] no PSRAM - spchrom.bin not loaded, CALL SAY not available\n");
     }
     SpeechSetChip(SPEECH_CHIP_TMS5200);   // what the TI-99/4A module actually shipped with
 
@@ -505,6 +548,7 @@ int ti99_load_cart(const char *path, u8 initDisks, char *errorMessage, size_t er
         // have been pointed at the 'G' file, which goes to MemGROM and can be much
         // smaller than the ROM - sizing from that would truncate the cartridge.
         long romSize = 0;
+        u32  extra   = 0;
         if ((fileType == 'C') || (fileType == 'G') || (fileType == 'D'))
         {
             size_t len = strlen(tmpBuf);
@@ -515,6 +559,11 @@ int ti99_load_cart(const char *path, u8 initDisks, char *errorMessage, size_t er
             long dSize = ti99_file_size(tmpBuf);
             tmpBuf[len - 5] = saved;
             if (dSize > 0 && romSize < 0x2000) romSize = 0x2000;
+
+            // A 'D' file is extracted to MemCART+0x2000, so this layout needs one 8K
+            // bank beyond the 'C' file. Only this layout: a single-file image is read
+            // in at offset 0 and is already the whole cartridge.
+            extra = 0x2000;
         }
         else
         {
@@ -523,10 +572,14 @@ int ti99_load_cart(const char *path, u8 initDisks, char *errorMessage, size_t er
         if (romSize < 0x2000) romSize = 0x2000;
         file_size = (u32)romSize;
 
-        // The extra 8K covers a 'D' file, which is extracted to MemCART+0x2000.
-        if (ti99_cart_alloc((u32)romSize + 0x2000) != 0)
+        // Adding the 'D' bank unconditionally would round a 32K image up to a 64K
+        // allocation - 40K is five 8K banks, and the bank mask rounds that to eight.
+        // On a board with no PSRAM that doubling is the difference between fitting in
+        // the heap and not fitting in it.
+        if (ti99_cart_alloc((u32)romSize + extra) != 0)
         {
-            snprintf(errorMessage, errorMessageSize, "Cart too large (%ld bytes)", romSize);
+            snprintf(errorMessage, errorMessageSize, "No memory for %ldK cart",
+                     romSize / 1024);
             return -1;
         }
 

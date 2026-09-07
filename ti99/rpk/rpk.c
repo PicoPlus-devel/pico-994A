@@ -516,6 +516,9 @@ u8 rpk_load_paged7(void)
         // instead, and make sure the finished 32K image has somewhere to land.
         if (MAX_CART_SIZE < 0x8000) return 1;
 
+        // 32K of scratch, and malloc panics rather than returning NULL - so the guard
+        // below only means anything if the heap is asked first.
+        if (0x8000 + 8192 > ti99_sram_free()) return 1;
         u8 *swapArea = (u8 *)malloc(0x8000);
         if (!swapArea) return 1;
 
@@ -590,19 +593,36 @@ u8 rpk_load(const char* filename)
             // -------------------------------------------------------------------------
             // Size the cart buffer before any loader runs. Upstream can skip this - the
             // DS allocates a fixed 512K/8MB up front - but here MemCART is sized to the
-            // cart so the SRAM heap is not needlessly spent. The largest member of the
-            // archive is the ROM; the extra 8K covers the PAGED layout, whose second
-            // bank ('D') is extracted to MemCART+0x2000 after the first.
+            // cart so the SRAM heap is not needlessly spent.
+            //
+            // Only what the loaders actually put in MemCART counts: the rom_socket file
+            // at offset 0, and the rom2_socket file at 0x2000 (the PAGED layout's second
+            // bank). A grom_socket file is extracted straight into MemGROM[0x6000] and
+            // never touches the cart buffer - and on the first-party titles it is the
+            // largest member of the archive by far, so sizing from "the biggest file in
+            // the zip" asked for 64K to hold an 8K cartridge. On a board with no PSRAM
+            // that is the difference between Extended Basic loading and not loading.
             // -------------------------------------------------------------------------
             {
-                unsigned int largest = 0;
-                for (int idx = 0; ; idx++)
+                unsigned int need = 0;
+                for (u8 i = 0; i < cart_layout.num_roms; i++)
                 {
-                    lowzip_file *fi = lowzip_locate_file(&st, idx, NULL);
-                    if (!fi) break;
-                    if (fi->uncompressed_size > largest) largest = fi->uncompressed_size;
+                    const char *socket = cart_layout.sockets[rpk_match_rom_to_socket(i)].socket_id;
+                    u8 isRom  = (strcasecmp(socket, "rom_socket")  == 0) ? 1 : 0;
+                    u8 isRom2 = (strcasecmp(socket, "rom2_socket") == 0) ? 1 : 0;
+                    if (!isRom && !isRom2) continue;
+
+                    lowzip_file *fi = lowzip_locate_file(&st, 0, cart_layout.roms[i].rom_file);
+                    if (!fi) continue;
+
+                    unsigned int end = fi->uncompressed_size + (isRom2 ? 0x2000 : 0);
+                    if (end > need) need = end;
                 }
-                if (ti99_cart_alloc(largest + 0x2000) != 0)
+
+                // paged7 (TI-Calc) builds a 32K image in place out of the loaded banks.
+                if (cart_layout.pcb == PCB_PAGED7 && need < 0x8000) need = 0x8000;
+
+                if (ti99_cart_alloc(need) != 0)
                 {
                     fclose(input);
                     return 1;       // no room for a cart this size
