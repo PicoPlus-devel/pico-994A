@@ -28,14 +28,7 @@ jobs:
     build-release:
         runs-on: self-hosted
         name: Build and create release
-        steps:
-          
-          # - name: Install dependencies
-          #   run: |
-          #        sudo apt update && \
-          #        sudo apt install -y git python3 && \
-          #        sudo apt install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential libusb-1.0-0-dev
-                 
+        steps:         
           - name: Check out this repository with submodules
             uses: actions/checkout@v6
             with:
@@ -59,39 +52,12 @@ jobs:
                  grep "pico_set_program_version" CMakeLists.txt
                  grep SWVERSION pico_shared/menu.h
 
-          # - name: Install Pico SDk
-          #   run: |
-          #        cd $HOME && \
-          #        git clone https://github.com/raspberrypi/pico-sdk.git --branch master && \
-          #        cd pico-sdk/ && \
-          #        git submodule update --init
-
-          # - name: Install picotool
-          #   run: |
-          #        cd $HOME && \
-          #        export PICO_SDK_PATH=$HOME/pico-sdk && \
-          #        git clone https://github.com/raspberrypi/picotool.git --branch master && \
-          #        cd picotool/ && \
-          #        mkdir build && \
-          #        cd build && \
-          #        cmake .. && \
-          #        make
-
           - name: Build all the .uf2 files
             run: |            
                  chmod +x build*.sh bld.sh || exit 1
                  export PICO_SDK_PATH=/datalocal/pico/pico-sdk
                  export PICO_PIO_USB_PATH=/datalocal/Pico-PIO-USB
                  ./buildAll.sh
-
-          # - name: Show release info using picotool
-          #  run: |
-          #       PICOTOOL=$HOME/picotool/build/picotool
-          #       export PICO_SDK_PATH=$HOME/pico-sdk
-          #       for file in releases/*.uf2; do
-          #           echo "-----------------------------"
-          #           $PICOTOOL info $file
-          #       done
 
           - name: Copy PCEMetadata.zip to workspace
             run: |
@@ -106,7 +72,6 @@ jobs:
                 pico_shared/PCB/pico_nesPCB_v2.6.zip
                 pico_shared/PCB/Gerber_PicoNES_Mini_PCB_v2.0.zip
                 pico_shared/PCB/Gerber_PicoNES_Micro_v1.2.zip
-                releases/PCEMetadata.zip
               body_path: CHANGELOG.md
           
          
