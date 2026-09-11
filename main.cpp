@@ -932,11 +932,25 @@ static void update_ti_keyboard(void)
 static constexpr int MIN_HOLD_FRAMES      = 2;
 static constexpr int MIN_GAP_FRAMES       = 1;
 static constexpr int SCAN_TIMEOUT_FRAMES  = 120;
-// The console keeps scanning from its own interrupt while BASIC tokenises a line and
-// scrolls, so a sweep alone does not prove the editor is listening again. Hence a frank
-// minimum here rather than trusting the handshake: this is the one number to raise if a
-// paste still loses the first character of a line.
-static constexpr int ENTER_MIN_GAP_FRAMES = 30;
+// After ENTER, BASIC tokenises the line and scrolls, and somewhere in that work it makes a
+// keyboard sweep of its own that is not the editor asking for input. A key held down at
+// that moment is read and thrown away, and the column handshake cannot tell the difference.
+// That is how a paste lost the first character of a line - usually a line-number digit, so
+// the line was quietly renumbered and broke the program somewhere else entirely. After
+// ENTER the next key therefore waits until the editor is polling at its own rate: several
+// full sweeps a frame (tms9901.KeySweeps), in consecutive frames with no key held.
+//
+// Measured on the host by pasting listings into Extended BASIC (90 ENTERs) and TI BASIC
+// (54): while BASIC was busy a frame showed 0 or 1 sweeps, never more; once the editor was
+// polling, 2-9. The wait ran from 9 to 47 frames and was longest late in a long listing,
+// so the fixed 30-frame gap this replaces was too long for most lines and too short for
+// the rest.
+static constexpr int EDITOR_POLL_SWEEPS   = 2;    // sweeps in one frame that mean the editor is polling
+static constexpr int EDITOR_POLL_FRAMES   = 2;    // consecutive such frames: margin over a lone busy sweep
+// Backstop for software that never polls that fast, such as a running program reading
+// keys with CALL KEY. Longer than SCAN_TIMEOUT_FRAMES because BASIC's busy time after
+// ENTER keeps growing with the program.
+static constexpr int ENTER_TIMEOUT_FRAMES = 300;
 
 // After abandoning a paste, ignore everything arriving until the line has been quiet this
 // long. Releasing XOFF lets the host empty a transmit queue that may still hold most of
@@ -985,7 +999,7 @@ static uint8_t    serialNeedCols = 0;             // columns the console must re
 static TIKeyCombo serialKey;
 static SerialPhase serialPhase = SERIAL_IDLE;
 static int        serialFrames = 0;
-static int        serialGapFrames = 1;   // minimum frames to stay released; longer after ENTER
+static int        serialIdlePolls = 0;   // consecutive frames the editor was seen polling, after ENTER
 
 static inline unsigned serialRingUsed(void) { return (serialHead - serialTail) & (SERIAL_RING_SIZE - 1); }
 static inline unsigned serialRingFree(void) { return SERIAL_RING_SIZE - 1 - serialRingUsed(); }
@@ -1245,7 +1259,6 @@ static void serialKeyboardTick(void)
         serialTypedCount++;
         serialNeedCols  = (uint8_t)(1u << serialKeyColumn[k.key]);
         if (k.modifier != TMS_KEY_NONE) serialNeedCols |= (uint8_t)(1u << serialKeyColumn[k.modifier]);
-        serialGapFrames = (k.key == TMS_KEY_ENTER) ? ENTER_MIN_GAP_FRAMES : MIN_GAP_FRAMES;
         serialPhase     = SERIAL_HOLD;
         serialFrames    = 0;
         tms9901.KeyColsScanned = 0;   // only reads from here on count as having seen this key
@@ -1269,16 +1282,31 @@ static void serialKeyboardTick(void)
             // the same key twice without one sweep showing the key up in between.
             serialPhase            = SERIAL_GAP;
             serialFrames           = 0;
+            serialIdlePolls        = 0;
             tms9901.KeyColsScanned = 0;
+            tms9901.KeySweeps      = 0;   // count from the first frame with the key up
             return;
         }
         tms9901.Keyboard[serialKey.key] = 1;
         if (serialKey.modifier != TMS_KEY_NONE) tms9901.Keyboard[serialKey.modifier] = 1;
     }
-    else if ((seen && serialFrames >= serialGapFrames) || serialFrames >= SCAN_TIMEOUT_FRAMES)
+    else
     {
-        serialPhase  = SERIAL_IDLE;
-        serialFrames = 0;
+        // KeySweeps holds exactly the frame just run: cleared at the release above, and
+        // again here on every tick of the gap.
+        serialIdlePolls   = (tms9901.KeySweeps >= EDITOR_POLL_SWEEPS) ? serialIdlePolls + 1 : 0;
+        tms9901.KeySweeps = 0;
+
+        // After ENTER only the editor polling at its own rate shows it is listening again
+        // (see EDITOR_POLL_SWEEPS). Any other key just needs its columns seen with it up.
+        bool done = (serialKey.key == TMS_KEY_ENTER)
+                  ? (serialIdlePolls >= EDITOR_POLL_FRAMES || serialFrames >= ENTER_TIMEOUT_FRAMES)
+                  : ((seen && serialFrames >= MIN_GAP_FRAMES) || serialFrames >= SCAN_TIMEOUT_FRAMES);
+        if (done)
+        {
+            serialPhase  = SERIAL_IDLE;
+            serialFrames = 0;
+        }
     }
 }
 

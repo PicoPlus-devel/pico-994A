@@ -77,6 +77,11 @@ typedef struct _TMS9901
                                         // Lets a caller synthesising keypresses tell when the console has
                                         // actually looked at the matrix: KSCAN sweeps columns 0-5, but stops
                                         // dead while BASIC tokenises a line or scrolls the screen.
+    u8      KeySweeps;                  // Full KSCAN sweeps since the front end last cleared it, counted on
+                                        // row 0 of column 5, the last column KSCAN reads. The console
+                                        // interrupt's QUIT check only reads column 0, so this counts KSCAN
+                                        // calls alone, and their rate tells the BASIC editor waiting for a
+                                        // key (several a frame) from the odd scan BASIC makes while busy.
     u8      VDPIntteruptInProcess;      // Set to '1' if the VDP interrupt is in process
     u8      TimerIntteruptInProcess;    // Set to '1' if the Timer interrupt is in process
     u32     TimerStart;                 // The Starting value

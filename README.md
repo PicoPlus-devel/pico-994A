@@ -601,7 +601,15 @@ about 50 ms instead.
 Typing paces itself against the machine rather than running to a fixed clock: each
 keypress is held until the console has actually scanned the keyboard for it. That matters
 because TI BASIC stops scanning altogether while it tokenises a line and scrolls the
-screen, and anything typed into that window would simply be lost.
+screen, and anything typed into that window would simply be lost. After ENTER it waits
+longer still, until the editor is polling the keyboard at its normal rate again: while
+BASIC is busy with the line it makes an occasional scan of its own, and a key caught by
+that scan is discarded. This used to drop the first character of some lines - usually a
+digit of the line number, which silently renumbered the line.
+
+The serial keyboard is intended for entering listings. A running program that reads the
+keyboard, for example with `CALL KEY`, may miss keys sent this way; use the USB keyboard
+for those.
 
 Incoming characters are collected by the UART interrupt rather than polled from the
 emulation loop. The loop spends much of each frame waiting for vsync, and the UART's

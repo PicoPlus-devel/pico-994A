@@ -408,6 +408,7 @@ ITCM_CODE u16 TMS9901_ReadCRU(u16 cruAddress, u8 num)
                             // ------------------------------------------------------------------------------------------------------------------------
                             u8 column = (tms9901.PinState[PIN_COL3]<<2) | (tms9901.PinState[PIN_COL2]<<1) | (tms9901.PinState[PIN_COL1]<<0);
                             tms9901.KeyColsScanned |= (1 << column);    // note that this column was looked at
+                            if (column == 5 && cruA == 3) tms9901.KeySweeps++;   // one complete KSCAN sweep
                             if (tms9901.Keyboard[TIKeys[cruA-3][column]]) bitState = 0;
                         }
                         break;
