@@ -20,7 +20,8 @@ This project is part of a family of Raspberry Pi Pico emulator projects:
 - PC Engine / TurboGrafx-16: [pico-pcePlus](https://github.com/fhoedemakers/pico-pcePlus)
 - Odyssey 2 / VideoPac: [pico-pacPlus](https://github.com/fhoedemakers/pico-pacPlus)
 - Super Nintendo: [pico_snesPlus](https://github.com/fhoedemakers/pico_snesPlus)
-- Multi-emulator bundle for the [Adafruit Fruit Jam](https://www.adafruit.com/product/6200): [retroJam](https://github.com/fhoedemakers/retroJam)
+
+There is also a all-in one solution containing all the emulators: [pico-bootLoader](https://github.com/PicoPlus-devel/pico-bootLoader)
 
 ***
 
