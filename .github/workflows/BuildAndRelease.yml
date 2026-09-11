@@ -17,7 +17,7 @@ on:
 
 # Must match the project() name in CMakeLists.txt
 env:
-    APP_NAME: picopcePlus
+    APP_NAME: pico994A
 
 # Allow this workflow to write back to the repository
 permissions:
@@ -58,10 +58,6 @@ jobs:
                  export PICO_SDK_PATH=/datalocal/pico/pico-sdk
                  export PICO_PIO_USB_PATH=/datalocal/Pico-PIO-USB
                  ./buildAll.sh
-
-          - name: Copy PCEMetadata.zip to workspace
-            run: |
-              cp /datalocal/upload/pico-infonesPlus/PCEMetadata.zip releases/PCEMetadata.zip
 
           - name: Create release
             uses: softprops/action-gh-release@v3

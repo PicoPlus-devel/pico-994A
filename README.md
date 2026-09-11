@@ -21,7 +21,8 @@ This project is part of a family of Raspberry Pi Pico emulator projects:
 - Odyssey 2 / VideoPac: [pico-pacPlus](https://github.com/fhoedemakers/pico-pacPlus)
 - Super Nintendo: [pico_snesPlus](https://github.com/fhoedemakers/pico_snesPlus)
 
-There is also a all-in one solution containing all the emulators: [pico-bootLoader](https://github.com/PicoPlus-devel/pico-bootLoader)
+There is also an all-in-one solution that runs several of these emulators from a single
+menu: [pico-bootLoader](https://github.com/fhoedemakers/pico-bootLoader).
 
 ***
 
@@ -38,13 +39,12 @@ There is also a all-in one solution containing all the emulators: [pico-bootLoad
 - **Disk controller** - DSK1, DSK2 and DSK3 against `.DSK` sector images, read and write,
   mounted beside the cartridge or chosen from the menu. Needs a board with PSRAM (see
   [Memory](#memory)).
-- **SAMS memory expansion** - 1 MB to 8 MB on boards with PSRAM fitted.
 - **Speech Synthesizer** - real LPC synthesis of the TMS5200, not sampled playback.
   See [Speech](#speech) below.
 - **Cassette (CS1/CS2)** - `SAVE CS1` and `OLD CS1` against `.wav` or `.cas` files, and
   real cassette dumps load unchanged. See [Cassette](#cassette) below.
 
-Not emulated yet: save states and the p-code card. See [Not yet done](#not-yet-done).
+Not emulated yet: save states, SAMS memory expansion and the p-code card. See [Not yet done](#not-yet-done).
 
 ***
 
@@ -75,8 +75,9 @@ These are copyrighted TI system software and are not distributed here.
 **`.rpk` is the format to prefer.** A Rom PacK is a single zip holding every part of the
 cartridge plus a `layout.xml` describing how they map, so one file is all you need.
 
-The classic multi-file `.bin` sets also work. Select any part in the menu and the rest
-are picked up automatically from the same folder:
+The classic multi-file `.bin` sets also work. The menu lists each set once, under its main
+part (`C`, `8` or `9`); selecting it picks up the other parts from the same folder. A
+GROM-only cartridge has no main part and is listed under its `G` file:
 
 | Suffix | Contents |
 |--------|----------|
@@ -343,7 +344,7 @@ written.
 | | |
 |---|---|
 | `.wav` | The interoperable one. Any rate, mono or stereo, 8/16/24/32-bit integer or 32-bit float, so **real cassette dumps load unchanged** - they are usually 32-bit float at 48 kHz - and a tape you record opens in Audacity. Written as 44.1 kHz 8-bit mono, about 44 KB per second of tape. |
-| `.cas` | The compact one - one bit per tape cell, roughly 170 bytes per second. Carries the bit rate the console actually recorded at in a small header, so playback matches the machine rather than an assumed baud rate. |
+| `.cas` | The compact one - one bit per tape cell, roughly 160 bytes per second. Carries the bit rate the console actually recorded at in a small header, so playback matches the machine rather than an assumed baud rate. |
 
 Loading runs at real tape speed, because the console is timing the bits as they arrive.
 A short BASIC program takes a few seconds; a long one takes as long as it did in 1981.
@@ -521,9 +522,10 @@ practical way to get a BASIC listing written on a PC into TI BASIC or Extended B
 without typing it twice. Turn **Serial keyboard** on in the settings menu; it is off by
 default and the setting is remembered.
 
-Connect a [Raspberry Pi Debug Probe](https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html) or a USB-to-serial adapter to the board's UART pins. Normally this is GPIO 0 (TX) and GPIO1 (RX) and a GND pin. 
-On the Adafruit Fruit Jam that is GPIO 44 (TX), GPIO 45 (RX) and GND on the 2x16 header - the same pins the emulator
-already prints its startup banner on, so a working banner confirms the wiring.
+Connect a [Raspberry Pi Debug Probe](https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html) or a USB-to-serial adapter to the board's UART pins: normally GPIO 0 (TX), GPIO 1 (RX) and
+GND. On the Adafruit Fruit Jam they are GPIO 44 (TX), GPIO 45 (RX) and GND on the 2x16
+header. These are the pins the emulator prints its startup banner on, so a working banner
+confirms the wiring.
 
 Any terminal program will do, as long as it is set to **115200 8N1 with software
 (XON/XOFF) flow control** and hardware (RTS/CTS) flow control turned off. With minicom:
@@ -555,8 +557,7 @@ Both of those flags are easy to lose and neither fails loudly. `raw` implies `-i
 untouched: with echo on, the host sends whatever the emulator prints straight back to the
 board, which then types it into TI BASIC as though it had been keyed in.
 
-`tools/copybas.sh` sets all of this for you, and is the easier way to do it.
-
+`tools/copybas.sh`, described below, sets all of this for you and is the easier way to do it.
 
 The device name depends on the adapter: a Raspberry Pi Debug Probe and other CDC-ACM
 adapters appear as `/dev/ttyACM0`, while FTDI, CP210x and CH340 adapters appear as
@@ -626,10 +627,8 @@ copybas.sh: board | Serial keyboard: 2115 characters received, 2115 typed
 copybas.sh: all 2115 characters reached the board
 ```
 
-The emulator reports its totals on the serial port whenever it finishes typing a paste,
-whether or not this script is listening. A count short of what was sent means those
-characters never reached the board, which is a fault in the serial link or the sending
-program rather than in the emulator's typing.
+The emulator prints that totals line whenever it finishes typing a paste, whether or not
+this script is listening.
 
 `examples/pastetest.bas` is a short TI BASIC program for checking all of this. Paste it
 in and type `RUN`: it prints every character the TI keeps on its FCTN and SHIFT layers, so
@@ -672,6 +671,9 @@ than present and silently inert.
 | SELECT + START | Settings menu (cassette lives here) |
 | SELECT + UP/DOWN | Screen mode |
 | START + A | Toggle FPS display |
+| START + LEFT/RIGHT | Volume of the built-in speaker and audio jack (Fruit Jam only) |
+| SELECT + LEFT | Switch audio to the line-out jack (Pimoroni Pico DV Demo Base only) |
+| SELECT + RIGHT | Toggle the VU meter (Fruit Jam only) |
 | SELECT + START + UP + A | Reboot into BOOTSEL mode |
 
 Nearly every cartridge opens on the master title screen asking for a number, so SELECT and
@@ -712,11 +714,11 @@ it and give back 128 KB of SRAM. Boards without PSRAM fall back to SRAM and run 
 before; nothing is excluded.
 
 **SRAM always.** Video RAM (16 KB) stays put: the VDP walks it for every scanline it
-renders, and 16 KB is not worth the latency. Cartridges up to 64 KB stay in SRAM too -
-every fetch from `>6000` goes through them.
+renders, and 16 KB is not worth the latency. Cartridges up to 64 KB stay in SRAM too while
+there is room for them - every fetch from `>6000` goes through them.
 
 **PSRAM only, feature off without it.** The disk controller DSR (8 KB), the speech
-vocabulary ROM (32 KB), Super Cart RAM (32 KB), SAMS memory, and cartridges over 64 KB.
+vocabulary ROM (32 KB), Super Cart RAM (32 KB), and cartridges too large for SRAM.
 
 The reason for deciding all of this up front rather than at the point of allocation: the
 SDK's `malloc` **panics** instead of returning NULL, so "try SRAM, fall back to PSRAM"
@@ -748,6 +750,7 @@ cd pico-994A
 ## Not yet done
 
 - **Save states.**
+- **SAMS memory expansion.** The DS994a code for it is included but not yet switched on.
 - **p-code card.**
 
 ***
