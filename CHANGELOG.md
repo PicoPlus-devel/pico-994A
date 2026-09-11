@@ -24,7 +24,7 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 > RP2350 only. The original Raspberry Pi Pico (RP2040) does not have enough memory for the
 > TI-99/4A.
 
-# v0.1.0
+# v0.1
 
 First release.
 
