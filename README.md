@@ -520,8 +520,8 @@ practical way to get a BASIC listing written on a PC into TI BASIC or Extended B
 without typing it twice. Turn **Serial keyboard** on in the settings menu; it is off by
 default and the setting is remembered.
 
-Connect a USB-to-serial adapter to the board's UART pins. On the Adafruit Fruit Jam that
-is GPIO 44 (TX), GPIO 45 (RX) and GND on the 2x16 header - the same pins the emulator
+Connect a [Raspberry Pi Debug Probe](https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html) or a USB-to-serial adapter to the board's UART pins. Normally this is GPIO 0 (TX) and GPIO1 (RX) and a GND pin. 
+On the Adafruit Fruit Jam that is GPIO 44 (TX), GPIO 45 (RX) and GND on the 2x16 header - the same pins the emulator
 already prints its startup banner on, so a working banner confirms the wiring.
 
 Any terminal program will do, as long as it is set to **115200 8N1 with software
