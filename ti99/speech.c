@@ -265,14 +265,23 @@ static void update_status(void)
 
 // Pull one bit from whichever source is feeding the frame decoder.
 //
-// Bit order is the thing to get right here: the LPC bitstream runs **least significant
-// bit first within each byte**, because the TMS6100 shifts its serial data out that way
-// and cartridge speech data is stored in the same order. Fields are still assembled most
-// significant bit first out of that stream, so a byte is effectively read back to front.
-// (This is why the Talkie library bit-reverses every byte before parsing it.) Reading
-// MSB-first instead still decodes *something* - the fields simply land on the wrong bits,
-// the stream drifts, and sooner or later a 4-bit energy field reads as 15 and the phrase
-// stops dead partway through.
+// Bit order is the thing to get right here, and the two sources differ:
+//
+// - Speak External (FIFO) data runs **least significant bit first within each byte**,
+//   the order cartridges store it in. Fields are still assembled most significant bit
+//   first out of that stream, so a byte is effectively read back to front. (This is why
+//   the Talkie library bit-reverses every byte before parsing it.) Proven against all 22
+//   of Parsec's phrases: each consumes exactly its declared length and ends on a stop
+//   frame.
+// - The vocabulary ROM image (spchrom.bin) is stored the other way round, **most
+//   significant bit first**. Its word tree gives every word's start address and length,
+//   and read MSB-first all 373 words end on a stop frame within their declared length;
+//   read LSB-first, HELLO stops after four frames. Read Byte is unaffected - the tree's
+//   ASCII words and pointers are used byte for byte as stored.
+//
+// Getting either backwards still decodes *something* - the fields simply land on the
+// wrong bits, the stream drifts, and sooner or later a 4-bit energy field reads as 15 and
+// the phrase stops dead partway through.
 //
 // Returns 0 and sets `ran_out` when a Speak External stream is exhausted - the chip
 // treats that exactly like a stop frame.
@@ -299,7 +308,7 @@ static u8 read_bit(void)
         if (!sp.rom || sp.rom_size == 0) { ran_out = 1; return 0; }
 
         u32 addr = sp.rom_addr % sp.rom_size;
-        bit = (sp.rom[addr] >> sp.fifo_bit) & 1;
+        bit = (sp.rom[addr] >> (7 - sp.fifo_bit)) & 1;
         if (++sp.fifo_bit >= 8)
         {
             sp.fifo_bit = 0;

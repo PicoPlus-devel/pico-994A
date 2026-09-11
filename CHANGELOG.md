@@ -42,6 +42,7 @@ First release.
   are inserted automatically; others can be inserted from the settings menu, where blank
   disks can also be created. Saved programs are written to the SD card straight away.
 - **Speech Synthesizer.** Cartridges such as Parsec and Alpiner talk without extra files.
+  `CALL SAY` in Extended BASIC uses the vocabulary in `spchrom.bin`.
 - **Cassette (CS1/CS2).** `SAVE CS1` and `OLD CS1` with `.wav` or `.cas` files. Recordings of
   real cassettes load as they are.
 - **Pasting BASIC listings over the serial port**, so a program written on a PC does not have

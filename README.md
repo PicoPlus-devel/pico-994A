@@ -438,14 +438,17 @@ is only loaded when present, so it costs nothing if you leave it out. Like the d
 controller DSR it is held in PSRAM, so it is not loaded at all on a board without one
 (see [Memory](#memory)); the module itself still works there.
 
-The LPC bitstream is read **least significant bit first within each byte** - the order
-the TMS6100 shifts its serial data out, and the order cartridge speech data is stored in.
-Fields are then assembled most significant bit first out of that stream, so each byte is
-effectively read back to front. Getting this backwards does not fail loudly: the fields
-land on the wrong bits, the stream drifts, and eventually a 4-bit energy field reads as
-15 - a stop frame - and the phrase cuts off partway through. That was the cause of the
-"no speech in Parsec" bug; all 22 of Parsec's phrases now decode to exactly their
-declared byte count and end on a real stop frame.
+Cartridge speech data (Speak External) is read **least significant bit first within each
+byte**, the order cartridges store it in. Fields are then assembled most significant bit
+first out of that stream, so each byte is effectively read back to front. The vocabulary
+image in `spchrom.bin` is stored the other way round and is read **most significant bit
+first**; its word table gives every word's address and length, and read in that order all
+373 words end on a stop frame within their declared length. Getting either order
+backwards does not fail loudly: the fields land on the wrong bits, the stream drifts, and
+eventually a 4-bit energy field reads as 15 - a stop frame - and the phrase cuts off
+partway through. That was the cause of the "no speech in Parsec" bug, and of `CALL SAY`
+producing only a short, unrecognisable sound. All 22 of Parsec's phrases now decode to
+exactly their declared byte count and end on a real stop frame.
 
 Output level is set so a loud phrase peaks at about 10700, which is where one PSG channel
 at full volume sits, so speech carries over the game without the mixer clipping when both
@@ -743,9 +746,9 @@ cd pico-994A
 
 ## Known issues
 
-- **`CALL SAY` / resident vocabulary is unverified.** The vocabulary ROM read path shares
-  the bit-order fix described under [Speech](#speech), but only cartridge speech has been
-  checked against real data so far.
+- **`CALL SAY` / resident vocabulary has not been confirmed on hardware.** Every word in
+  `spchrom.bin` has been checked against its declared length on the host (see
+  [Speech](#speech)); it has not yet been heard on a board.
 
 ## Not yet done
 
