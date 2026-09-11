@@ -745,10 +745,10 @@ static TIKeyCombo hidKeyToTIKey(uint8_t hid, bool shifted)
 {
     // A PC keyboard reaches these with SHIFT; the TI keeps them on the FCTN layer of a
     // different key entirely, so the scancode alone cannot say which character is meant.
-    // They are marked exact because the TI wants FCTN+key and nothing else - leaking the
-    // held SHIFT through as well is what used to turn '"' back into FCTN+O, an
-    // apostrophe. Everything a US keyboard and the TI shift alike (!@#$%^&*() : < > +)
-    // falls through to the plain mapping below and needs nothing special.
+    // They are marked exact because the TI wants FCTN+key and nothing else, so the held
+    // SHIFT is not passed through on top. Everything a US keyboard and the TI shift alike
+    // (!@#$%^&*() : < > +) falls through to the plain mapping below and needs nothing
+    // special.
     if (shifted)
     {
         switch (hid)
@@ -861,6 +861,14 @@ static TIKeyCombo hidKeyToTIKey(uint8_t hid, bool shifted)
 static bool alphaLock = false;
 static bool capsWasDown = false;
 
+// A key keeps the TI combination it was pressed as until it is released, as a PC settles
+// the character at key-down. For the characters the TI keeps on FCTN, SHIFT decides which
+// TI key is down at all: letting go of SHIFT a moment before the key - ordinary typing -
+// would swap FCTN+P for FCTN+O under a key still held, and KSCAN takes that as a second
+// keystroke, so Shift+' typed "' rather than ".
+static uint8_t    heldHid[6];
+static TIKeyCombo heldCombo[6];
+
 static void update_ti_keyboard(void)
 {
     TMS9901_ClearJoyKeyData();
@@ -879,6 +887,8 @@ static void update_ti_keyboard(void)
 
     bool capsDown      = false;
     bool suppressShift = false;
+    uint8_t    nowHid[6] = {};
+    TIKeyCombo nowCombo[6];
     for (int i = 0; i < 6; i++)
     {
         uint8_t hid = kb.keycode[i];
@@ -887,6 +897,11 @@ static void update_ti_keyboard(void)
         if (hid == HID_KEY_CAPS_LOCK) { capsDown = true; continue; }
 
         TIKeyCombo k = hidKeyToTIKey(hid, shiftHeld);
+        for (int j = 0; j < 6; j++)
+            if (heldHid[j] == hid) { k = heldCombo[j]; break; }
+        nowHid[i]   = hid;
+        nowCombo[i] = k;
+
         if (k.key != TMS_KEY_NONE)
         {
             tms9901.Keyboard[k.key] = 1;
@@ -894,6 +909,8 @@ static void update_ti_keyboard(void)
             if (k.exact) suppressShift = true;
         }
     }
+    memcpy(heldHid, nowHid, sizeof(heldHid));
+    memcpy(heldCombo, nowCombo, sizeof(heldCombo));
 
     if (shiftHeld && !suppressShift) tms9901.Keyboard[TMS_KEY_SHIFT] = 1;
 
