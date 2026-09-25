@@ -135,11 +135,13 @@ const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
     1,                               // Enter bootsel mode
     1,                               // Controller Test
     0,                               // Recent Games
-    0,                               // USB Drive Mode - not built (FRENS_USB_MSC is off here)
+    0,                               // USB Drive Mode (menu.cpp force-shows this in the rom browser)
     1,                               // Cassette CS1/CS2
     1,                               // Disk DSK1/2/3 (shows N/A without the disk DSR)
     SERIAL_KEYBOARD_AVAILABLE,       // Serial keyboard - hidden where the board has no UART
                                      // console, or gives its RX pin to something else
+    0,                               // Sprite Limit (NES only)
+    0,                               // Overscan in menu (menu.cpp force-shows this below the menu colors)
 };
 
 // -------------------------------------------------------------------------------------
