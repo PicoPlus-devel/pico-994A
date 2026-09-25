@@ -5,7 +5,7 @@
 **pico-994A** is a Texas Instruments TI-99/4A emulator for RP2350-based microcontrollers.
 It is based on the [DS994a](https://github.com/wavemotion-dave/DS994a) emulation core by
 Dave Bernazzani (wavemotion-dave), integrated with the video, audio, menu, and SD card
-framework from [pico-infonesPlus](https://github.com/fhoedemakers/pico-infonesPlus).
+framework from [pico-infonesPlus](https://github.com/PicoPlus-devel/pico-infonesPlus).
 
 > [!IMPORTANT]
 > RP2350 only (Pico 2 and variants). The RP2040 is not supported - the TI-99/4A needs
@@ -13,16 +13,16 @@ framework from [pico-infonesPlus](https://github.com/fhoedemakers/pico-infonesPl
 
 This project is part of a family of Raspberry Pi Pico emulator projects:
 
-- NES: [pico-infonesPlus](https://github.com/fhoedemakers/pico-infonesPlus)
-- Sega Master System / Game Gear: [pico-smsplus](https://github.com/fhoedemakers/pico-smsplus)
-- Game Boy / Game Boy Color: [pico-peanutGB](https://github.com/fhoedemakers/pico-peanutGB)
-- Sega Mega Drive / Genesis: [pico-genesisPlus](https://github.com/fhoedemakers/pico-genesisPlus)
-- PC Engine / TurboGrafx-16: [pico-pcePlus](https://github.com/fhoedemakers/pico-pcePlus)
-- Odyssey 2 / VideoPac: [pico-pacPlus](https://github.com/fhoedemakers/pico-pacPlus)
-- Super Nintendo: [pico_snesPlus](https://github.com/fhoedemakers/pico_snesPlus)
+- NES: [pico-infonesPlus](https://github.com/PicoPlus-devel/pico-infonesPlus)
+- Sega Master System / Game Gear: [pico-smsplus](https://github.com/PicoPlus-devel/pico-smsplus)
+- Game Boy / Game Boy Color: [pico-peanutGB](https://github.com/PicoPlus-devel/pico-peanutGB)
+- Sega Mega Drive / Genesis: [pico-genesisPlus](https://github.com/PicoPlus-devel/pico-genesisPlus)
+- PC Engine / TurboGrafx-16: [pico-pcePlus](https://github.com/PicoPlus-devel/pico-pcePlus)
+- Odyssey 2 / VideoPac: [pico-pacPlus](https://github.com/PicoPlus-devel/pico-pacPlus)
+- Super Nintendo: [pico_snesPlus](https://github.com/PicoPlus-devel/pico-snesPlus)
 
 There is also an all-in-one solution that runs several of these emulators from a single
-menu: [pico-bootLoader](https://github.com/fhoedemakers/pico-bootLoader).
+menu: [pico-bootLoader](https://github.com/PicoPlus-devel/pico-bootLoader).
 
 ***
 
@@ -692,6 +692,17 @@ START are mapped to **1** and **2**. That is enough to start most games without 
 attached. Neither types anything while it is being held as part of one of the combinations
 above, so opening the settings menu does not put a 1 into the running game.
 
+The settings menu is opened with SELECT in the cartridge menu, or with SELECT + START while a
+cartridge is running. **Overscan fix in menu** is meant for TVs that cut off the edges of the picture: **Rows** leaves the top and bottom text rows of the menus blank, **Rows & columns** also leaves the first and last columns blank. The effect is shown while the setting is changed, and it applies to the menus only, not to the game picture. The color palette is shown only while one of the two menu color entries is selected, which leaves room for more entries on one page. In the settings menu, press SELECT on any setting to jump straight to the SAVE/CANCEL/DEFAULT row. Changes are only applied when **SAVE** is
+selected.
+
+When the settings menu is opened from the cartridge menu, it also offers **USB drive mode**,
+which shows the SD card on a computer as a USB drive, so cartridges, disks and tapes can be
+added without taking the card out. Eject the drive on the computer when finished; the
+cartridge list is re-read on the way out. On boards where the controllers share the USB port
+with the computer, a USB controller or keyboard cannot be used while the card is mounted, and
+the console restarts afterwards.
+
 ***
 
 ## Supported hardware
@@ -742,7 +753,7 @@ gated on PSRAM or routed to it.
 ```
 export PICO_SDK_PATH=/path/to/pico-sdk
 export PICO_PIO_USB_PATH=/path/to/Pico-PIO-USB
-git clone --recursive https://github.com/fhoedemakers/pico-994A.git
+git clone --recursive https://github.com/PicoPlus-devel/pico-994A.git
 cd pico-994A
 ./bld.sh -c 8 -2          # one config
 ./buildAll.sh             # everything, into releases/

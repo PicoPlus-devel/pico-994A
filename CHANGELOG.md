@@ -18,11 +18,23 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
    hold **BOOTSEL** while connecting the board over USB, and copy the file to the drive that
    appears.
 
-[Full setup instructions are in the readme](https://github.com/fhoedemakers/pico-994A#setup-overview).
+[Full setup instructions are in the readme](https://github.com/PicoPlus-devel/pico-994A#setup-overview).
 
 > [!IMPORTANT]
 > RP2350 only. The original Raspberry Pi Pico (RP2040) does not have enough memory for the
 > TI-99/4A.
+
+# v0.2
+
+## What's new
+
+- **Overscan fix in menu.** A new setting for TVs that cut off the edges of the screen. It leaves the top and bottom rows of the menus blank, and optionally the first and last columns as well. The change is shown right away in the settings menu.
+- **More options on one page in the settings menu.** The color palette is now only shown while one of the menu color options is selected, which leaves room for more options on screen.
+- **Quicker saving in the settings menu.** Press SELECT on any setting to jump straight to the SAVE/CANCEL/DEFAULT row.
+
+## Fixes
+
+- **Controller test screen** shows the controller outline and the list of controllers correctly again.
 
 # v0.1
 
@@ -49,7 +61,7 @@ First release.
   to be typed in. Switch on **Serial keyboard** in the settings menu. Not available on the
   Murmulator boards or the Pimoroni Pico DV Demo Base.
 - Builds for all 11 RP2350 hardware configurations, plus the
-  [pico-bootLoader](https://github.com/fhoedemakers/pico-bootLoader) variant.
+  [pico-bootLoader](https://github.com/PicoPlus-devel/pico-bootLoader) variant.
 
 ## Limitations
 
@@ -58,24 +70,24 @@ First release.
 - `CALL SAY` in Extended BASIC has not yet been tested on hardware.
 - Not available yet: save states, SAMS memory expansion, p-code card.
 - The emulation core is licensed for non-commercial use only. See
-  [LICENSE](https://github.com/fhoedemakers/pico-994A/blob/main/LICENSE).
+  [LICENSE](https://github.com/PicoPlus-devel/pico-994A/blob/main/LICENSE).
 
 <a name="downloads___"></a>
 ## Downloads by configuration
 
 Binaries for each configuration are listed below. For board-by-board wiring, PCB designs and
 3D-printable cases, refer to the
-[pico-infonesPlus documentation](https://github.com/fhoedemakers/pico-infonesPlus#setup). The
+[pico-infonesPlus documentation](https://github.com/PicoPlus-devel/pico-infonesPlus#setup). The
 boards and their pinouts are the same, but pico-994A runs on RP2350 boards only.
 
 ### Standalone boards
 
 | Board | Binary |
 |:--|:--|
-| Adafruit Metro RP2350 | [pico994A_AdafruitMetroRP2350_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_AdafruitMetroRP2350_arm.uf2) |
-| Adafruit Fruit Jam | [pico994A_AdafruitFruitJam_arm_piousb.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_AdafruitFruitJam_arm_piousb.uf2) |
-| Adafruit Feather RP2350 + TLV320DAC3100 | [pico994A_AdafruitFeatherRP2350_TLV320DAC3100_arm_piousb.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_AdafruitFeatherRP2350_TLV320DAC3100_arm_piousb.uf2) |
-| Waveshare RP2350-PiZero | [pico994A_WaveShareRP2350PiZero_arm_piousb.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_WaveShareRP2350PiZero_arm_piousb.uf2) |
+| Adafruit Metro RP2350 | [pico994A_AdafruitMetroRP2350_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_AdafruitMetroRP2350_arm.uf2) |
+| Adafruit Fruit Jam | [pico994A_AdafruitFruitJam_arm_piousb.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_AdafruitFruitJam_arm_piousb.uf2) |
+| Adafruit Feather RP2350 + TLV320DAC3100 | [pico994A_AdafruitFeatherRP2350_TLV320DAC3100_arm_piousb.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_AdafruitFeatherRP2350_TLV320DAC3100_arm_piousb.uf2) |
+| Waveshare RP2350-PiZero | [pico994A_WaveShareRP2350PiZero_arm_piousb.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_WaveShareRP2350PiZero_arm_piousb.uf2) |
 
 ### Breadboard / Custom PCB
 
@@ -83,21 +95,21 @@ Adafruit DVI Breakout + MicroSD card breakout, or the custom PCB.
 
 | Board | Binary |
 |:--|:--|
-| Pico 2 / Pimoroni Pico Plus 2 | [pico994A_AdafruitDVISD_pico2_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_AdafruitDVISD_pico2_arm.uf2) |
+| Pico 2 / Pimoroni Pico Plus 2 | [pico994A_AdafruitDVISD_pico2_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_AdafruitDVISD_pico2_arm.uf2) |
 
 ### PCB Waveshare RP2350-Zero (PCB required)
 
-[Binary](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_WaveShareRP2350ZeroWithPCB_arm.uf2)
+[Binary](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_WaveShareRP2350ZeroWithPCB_arm.uf2)
 
 ### PCB Waveshare RP2350-USBA (PCB required)
 
-[Binary](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_WaveShare2350USBA_arm_piousb.uf2)
+[Binary](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_WaveShare2350USBA_arm_piousb.uf2)
 
 ### Pimoroni Pico DV Demo Base
 
 | Board | Binary |
 |:--|:--|
-| Pico 2 / Pimoroni Pico Plus 2 | [pico994A_PimoroniDVI_pico2_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_PimoroniDVI_pico2_arm.uf2) |
+| Pico 2 / Pimoroni Pico Plus 2 | [pico994A_PimoroniDVI_pico2_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_PimoroniDVI_pico2_arm.uf2) |
 
 ### SpotPear HDMI
 
@@ -105,7 +117,7 @@ For more info about the SpotPear HDMI see https://spotpear.com/index/product/det
 
 | Board | Binary |
 |:--|:--|
-| Pico 2 / Pico 2 W | [pico994A_SpotpearHDMI_pico2_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_SpotpearHDMI_pico2_arm.uf2) |
+| Pico 2 / Pico 2 W | [pico994A_SpotpearHDMI_pico2_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_SpotpearHDMI_pico2_arm.uf2) |
 
 ### Murmulator M1
 
@@ -113,7 +125,7 @@ For more info about the Murmulator see https://murmulator.ru/.
 
 | Board | Binary |
 |:--|:--|
-| Pico 2 / Pico 2 W | [pico994A_MurmulatorM1_pico2_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_MurmulatorM1_pico2_arm.uf2) |
+| Pico 2 / Pico 2 W | [pico994A_MurmulatorM1_pico2_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_MurmulatorM1_pico2_arm.uf2) |
 
 ### Murmulator M2
 
@@ -121,4 +133,4 @@ For more info about the Murmulator see https://murmulator.ru/.
 
 | Board | Binary |
 |:--|:--|
-| Pico 2 / Pico 2 W | [pico994A_MurmulatorM2_arm.uf2](https://github.com/fhoedemakers/pico-994A/releases/latest/download/pico994A_MurmulatorM2_arm.uf2) |
+| Pico 2 / Pico 2 W | [pico994A_MurmulatorM2_arm.uf2](https://github.com/PicoPlus-devel/pico-994A/releases/latest/download/pico994A_MurmulatorM2_arm.uf2) |
