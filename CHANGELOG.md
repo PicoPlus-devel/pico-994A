@@ -24,6 +24,15 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 > RP2350 only. The original Raspberry Pi Pico (RP2040) does not have enough memory for the
 > TI-99/4A.
 
+# v0.3
+
+After updating, all settings return to their defaults once.
+
+## Fixes
+
+- **The Controller Test screen is now closed by holding SELECT + UP** for 2 seconds. SELECT + START conflicted with some 8BitDo wireless controllers.
+- **The B button of the AliExpress SNES USB controller works without pressing Y first.**
+
 # v0.2
 
 ## What's new
