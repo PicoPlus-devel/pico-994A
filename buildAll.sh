@@ -24,8 +24,8 @@ fi
 #   7  Waveshare RP2350-PiZero          8  Adafruit Fruit Jam (default)
 #   9  Waveshare RP2350-USB-A          10  Spotpear HDMI board
 #  12  Murmulator M1                   13  Murmulator M2
-#  14  Adafruit Feather RP2350
-HWCONFIGS="1 2 5 6 7 8 9 10 12 13 14"
+#  14  Adafruit Feather RP2350         15  Olimex RP2040-PICO-PC with a Pico 2
+HWCONFIGS="1 2 5 6 7 8 9 10 12 13 14 15"
 for HWCONFIG in $HWCONFIGS
 do
 	./bld.sh -c $HWCONFIG -2 || exit 1

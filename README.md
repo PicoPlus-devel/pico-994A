@@ -722,8 +722,27 @@ Built for every RP2350 configuration `pico_shared` supports:
 | 12 | Murmulator M1 |
 | 13 | Murmulator M2 |
 | 14 | Adafruit Feather RP2350 |
+| 15 | Olimex RP2040-PICO-PC with a Raspberry Pi Pico 2 |
 
 HW_CONFIG 3 and 4 are RP2040-only boards; 11 is a deprecated pinout.
+
+### Olimex RP2040-PICO-PC
+
+The [Olimex RP2040-PICO-PC](https://www.olimex.com/Products/MicroPython/PICO/RP2040-PICO-PC/)
+is a carrier board for a Raspberry Pi Pico with an HDMI connector, a microSD card slot, a
+USB-A port and an audio jack. Fitted with a Raspberry Pi Pico 2, it runs the HW_CONFIG 15
+build.
+
+- **Sound:** through HDMI and the audio jack at the same time.
+- **Keyboard and controllers:** a USB keyboard or controller on the USB-A port. A NES or SNES
+  controller can be connected to the UEXT connector: clock on GPIO 5, latch on GPIO 9 and
+  data on GPIO 20. There is no second controller port and no Wii Classic controller support.
+- **PSRAM:** a standard Pico 2 has none; PSRAM with its chip select on GPIO 8 is optional.
+  Without it, the features listed as PSRAM only under [Memory](#memory) are not available.
+- **Pico 2 W:** there is no Pico 2 W binary. On a Pico 2 W, GPIO 23, which this build uses to
+  reduce noise on the audio jack, is connected to the wireless chip.
+
+Support for this board was contributed by [DnCraptor](https://github.com/DnCraptor).
 
 ## Memory
 
@@ -792,6 +811,8 @@ cd pico-994A
   driver by fliperama86.
 - NES/Wii controller support from [@PaintYourDragon](https://github.com/PaintYourDragon)
   and Adafruit.
+- Support for the **Olimex RP2040-PICO-PC**, including sound through its audio jack, by
+  [DnCraptor](https://github.com/DnCraptor).
 
 See [LICENSE](LICENSE) for the full terms - in particular, the emulation core is used
 under a **non-commercial** licence, which is stricter than the GPL cores in the sibling
