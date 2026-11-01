@@ -107,41 +107,45 @@ static uint32_t fps = 0;
 #define TIBASIC_MARKER   "TI BASIC.tib"
 
 const int8_t g_settings_visibility_ti99[MOPT_COUNT] = {
-    0,                               // Exit Game (always visible in-game)
-    1,                               // Reset Game - the TI has no reset button of its own
-    BOOTLOADER_BUILD,                // Return to emuLoader picker
-    0,                               // Save / Restore State (not ported yet)
-    1,                               // Screen Mode
-    0,                               // Scanlines toggle (superseded by Screen Mode)
-    HSTX,                            // Scanline Type (HSTX only)
-    1,                               // FPS Overlay
-    0,                               // Audio Enable
-    0,                               // Frame Skip
-    HSTX && ENABLEDVI,               // Display Mode (HDMI or DVI)
-    (EXT_AUDIO_IS_ENABLED),          // External Audio
-    1,                               // Font Color
-    1,                               // Font Back Color
-    ENABLE_VU_METER,                 // VU Meter
-    (HW_CONFIG == 8),                // Fruit Jam Volume Control
-    0,                               // DMG Palette
-    0,                               // Border Mode
-    0,                               // Rapid Fire on A
-    0,                               // Rapid Fire on B
-    0,                               // Auto Insert Disk A (FDS only)
-    0,                               // Auto Swap FDS
-    0,                               // FDS Disk Swap
-    0,                               // Overclock - 252MHz is already plenty for a 3MHz TMS9900
-    0,                               // YM Audio (SMS only)
-    1,                               // Enter bootsel mode
-    1,                               // Controller Test
-    0,                               // Recent Games
-    0,                               // USB Drive Mode (menu.cpp force-shows this in the rom browser)
-    1,                               // Cassette CS1/CS2
-    1,                               // Disk DSK1/2/3 (shows N/A without the disk DSR)
-    SERIAL_KEYBOARD_AVAILABLE,       // Serial keyboard - hidden where the board has no UART
-                                     // console, or gives its RX pin to something else
-    0,                               // Sprite Limit (NES only)
-    0,                               // Overscan in menu (menu.cpp force-shows this below the menu colors)
+    [MOPT_EXIT_GAME]                 = 0,  // Always visible in-game
+    [MOPT_RESET_GAME]                = 1,  // The TI has no reset button of its own
+    [MOPT_REBOOT_TO_LOADER]          = BOOTLOADER_BUILD, // Return to emuLoader picker
+    [MOPT_SAVE_RESTORE_STATE]        = 0,  // Not ported yet
+    [MOPT_SCREENMODE]                = 1,
+    [MOPT_SCANLINES]                 = 0,  // Superseded by Screen Mode
+    [MOPT_SCANLINE_TYPE]             = HSTX, // HSTX only
+    [MOPT_FPS_OVERLAY]               = 1,
+    [MOPT_AUDIO_ENABLE]              = 0,
+    [MOPT_FRAMESKIP]                 = 0,
+    [MOPT_DISPLAY_MODE]              = HSTX && ENABLEDVI, // HDMI or DVI
+    [MOPT_EXTERNAL_AUDIO]            = (EXT_AUDIO_IS_ENABLED),
+    [MOPT_FONT_COLOR]                = 1,
+    [MOPT_FONT_BACK_COLOR]           = 1,
+    [MOPT_FRUITJAM_VUMETER]          = ENABLE_VU_METER,
+    [MOPT_FRUITJAM_VOLUME_CONTROL]   = (HW_CONFIG == 8),
+    [MOPT_DMG_PALETTE]               = 0,
+    [MOPT_BORDER_MODE]               = 0,
+    [MOPT_RAPID_FIRE_ON_A]           = 0,
+    [MOPT_RAPID_FIRE_ON_B]           = 0,
+    [MOPT_AUTO_INSERT_FDS_DISK_A]    = 0,  // FDS only
+    [MOPT_AUTO_SWAP_FDS_DISK]        = 0,  // FDS only
+    [MOPT_FDS_DISK_SWAP]             = 0,  // FDS only
+    [MOPT_OVERCLOCK]                 = 0,  // 252MHz is already plenty for a 3MHz TMS9900
+    [MOPT_FM_AUDIO]                  = 0,  // SMS only
+    [MOPT_ENTER_BOOTSEL_MODE]        = 1,
+    [MOPT_CONTROLLER_TEST]           = 1,
+    [MOPT_RECENT_GAMES]              = 0,
+    [MOPT_USB_DRIVE_MODE]            = 0,  // menu.cpp force-shows this in the rom browser
+    [MOPT_CASSETTE]                  = 1,  // CS1/CS2
+    [MOPT_DISK]                      = 1,  // DSK1/2/3 (shows N/A without the disk DSR)
+    [MOPT_SERIAL_KEYBOARD]           = SERIAL_KEYBOARD_AVAILABLE, // hidden where the board has no UART
+                                           // console, or gives its RX pin to something else
+    [MOPT_SPRITE_LIMIT]              = 0,  // NES only
+    [MOPT_MENU_OVERSCAN]             = 0,  // menu.cpp force-shows this below the menu colors
+    [MOPT_GENESIS_PAD]               = 0,  // Genesis only
+    [MOPT_NES_PALETTE]               = 0,  // NES only
+    [MOPT_BUTTON_LAYOUT]             = 0,  // NES only
+    [MOPT_TATE_MODE]                 = 0,  // Vertical arcade games only
 };
 
 // -------------------------------------------------------------------------------------
