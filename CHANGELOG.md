@@ -26,6 +26,10 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 
 # v0.3.1
 
+## Changes
+
+- **USB keyboard in the menus.** Enter selects and Esc goes back.
+
 ## Fixes
 
 - **USB controllers and keyboards on the Adafruit Fruit Jam and other boards with PIO-USB are now found at every start.** On boards with an older RP2350 chip they were often not detected.
