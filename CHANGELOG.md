@@ -24,6 +24,18 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 > RP2350 only. The original Raspberry Pi Pico (RP2040) does not have enough memory for the
 > TI-99/4A.
 
+# v0.3.2
+
+## Changes
+
+- **NES and SNES controllers on the controller ports are now read with the same timing as a real console**, on all boards. Thanks to @javavi.
+- Under pico-bootLoader, the settings menu entry that goes back to the bootloader is now called **Return to boot loader**.
+
+## Fixes
+
+- **The picture no longer drops out in DVI mode.** On boards with HSTX video, with *Display Mode* set to DVI, the picture could randomly drop out.
+- **No more flickering lines in DVI mode.** On boards with HSTX video, with *Display Mode* set to DVI, now and then a single line was shown shifted to the right for one frame.
+
 # v0.3.1
 
 ## Changes
