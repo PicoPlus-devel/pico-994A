@@ -723,6 +723,8 @@ Built for every RP2350 configuration `pico_shared` supports:
 | 13 | Murmulator M2 |
 | 14 | Adafruit Feather RP2350 |
 | 15 | Olimex RP2040-PICO-PC with a Raspberry Pi Pico 2 |
+| 17 | Pico Computer 3 |
+| 18 | PCB for the Waveshare RP2350-PiZero |
 
 HW_CONFIG 3 and 4 are RP2040-only boards; 11 is a deprecated pinout.
 
@@ -743,6 +745,57 @@ build.
   reduce noise on the audio jack, is connected to the wireless chip.
 
 Support for this board was contributed by [DnCraptor](https://github.com/DnCraptor).
+
+### Pico Computer 3
+
+The [Pico Computer 3](https://github.com/UKTailwind/Pico-Computer-3) (PC3) is an RP2350B computer
+board with an HDMI connector, a microSD card slot, 8 MB PSRAM, a USB hub and an audio jack.
+It runs the HW_CONFIG 17 build.
+
+> [!NOTE]
+> Support for this board is new. The pin assignment and other details below may change in a
+> future release.
+
+- **Sound:** through HDMI, or through the audio jack with *External Audio* in the settings
+  menu.
+- **Keyboard and controllers:** a USB keyboard and USB controllers on the USB-A ports. Up to
+  two NES or SNES controllers on the external I/O header H4:
+
+  | | Clock | Latch | Data |
+  |:--|:--|:--|:--|
+  | Port 1 | GPIO 0 | GPIO 1 | GPIO 2 |
+  | Port 2 | GPIO 3 | GPIO 4 | GPIO 5 |
+
+  A Wii Classic controller connects to I2C0: SDA on GPIO 20 and SCL on GPIO 21.
+- **PSRAM:** fitted on the board, so the features listed as PSRAM only under
+  [Memory](#memory) are available.
+- **LED:** the heartbeat LED on GPIO 25 is used when jumper H5 is set to 1-2.
+
+Support for this board was contributed by [javavi](https://github.com/javavi).
+
+### PCB with Waveshare RP2350-PiZero
+
+This PCB, designed by Liu Szuping ([szuping](https://github.com/szuping)), carries a
+[Waveshare RP2350-PiZero](https://www.waveshare.com/rp2350-pizero.htm) and adds an HDMI port,
+an audio jack, NES and SNES controller ports and a socket for an ESP32 module. It runs the
+HW_CONFIG 18 build. The PCB design is not yet available.
+
+- **Video:** through the HDMI port of the PCB. The mini HDMI port of the RP2350-PiZero is not
+  used.
+- **Sound:** through HDMI, or through the audio jack with *External Audio* in the settings
+  menu.
+- **Keyboard and controllers:** a USB keyboard or a USB controller on the PIO-USB port of the
+  RP2350-PiZero, and up to two NES or SNES controllers in the controller ports of the PCB.
+  With an ESP32 module running [BlueRetro](https://github.com/darthcloud/blueretro) in the socket,
+  Bluetooth controllers are used instead of the controller ports; remove the module to use the
+  ports.
+- **PSRAM:** optional, it has to be soldered onto the RP2350-PiZero. Without it, the features
+  listed as PSRAM only under [Memory](#memory) are not available. Boards that combine PSRAM
+  with a non-Winbond flash chip need a one-time fix first, see
+  [PSRAM with a non-Winbond flash chip](https://github.com/PicoPlus-devel/pico-infonesPlus#psram-with-a-non-winbond-flash-chip).
+
+See also [PCB with Waveshare RP2350-PiZero](https://github.com/PicoPlus-devel/pico-infonesPlus#pcb-with-waveshare-rp2350-pizero)
+in the pico-infonesPlus readme.
 
 ## Memory
 
@@ -813,6 +866,9 @@ cd pico-994A
   and Adafruit.
 - Support for the **Olimex RP2040-PICO-PC**, including sound through its audio jack, by
   [DnCraptor](https://github.com/DnCraptor).
+- Support for the **Pico Computer 3** by [javavi](https://github.com/javavi).
+- The **PCB for the Waveshare RP2350-PiZero** was designed by Liu Szuping
+  ([szuping](https://github.com/szuping)).
 
 See [LICENSE](LICENSE) for the full terms - in particular, the emulation core is used
 under a **non-commercial** licence, which is stricter than the GPL cores in the sibling
