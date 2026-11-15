@@ -763,8 +763,10 @@ It runs the HW_CONFIG 17 build.
 
   | | Clock | Latch | Data |
   |:--|:--|:--|:--|
-  | Port 1 | GPIO 0 | GPIO 1 | GPIO 2 |
-  | Port 2 | GPIO 3 | GPIO 4 | GPIO 5 |
+  | Port 1 | GPIO 4 | GPIO 5 | GPIO 6 |
+  | Port 2 | GPIO 4 | GPIO 5 | GPIO 7 |
+
+  Both ports share the clock and latch lines.
 
   A Wii Classic controller connects to I2C0: SDA on GPIO 20 and SCL on GPIO 21.
 - **PSRAM:** fitted on the board, so the features listed as PSRAM only under
