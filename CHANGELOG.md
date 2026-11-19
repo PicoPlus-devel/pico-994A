@@ -29,6 +29,7 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 ## Changes
 
 - Built with Pico SDK 2.3.1. This leaves a little more memory free, about 0.4 KB.
+- On boards with HSTX video and no PSRAM, a progress bar is now shown while a cartridge is written to flash, instead of a blank screen.
 
 # v0.4
 
