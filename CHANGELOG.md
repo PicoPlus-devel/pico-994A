@@ -24,7 +24,9 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 > RP2350 only. The original Raspberry Pi Pico (RP2040) does not have enough memory for the
 > TI-99/4A.
 
-# Next release
+# v0.4_bl
+
+This version is built for [pico-bootLoader](https://github.com/PicoPlus-devel/pico-bootLoader) only, and is included in its SD-card archive. It has no release of its own: without pico-bootLoader, keep using v0.4.
 
 ## What's new
 
