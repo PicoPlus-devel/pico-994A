@@ -27,6 +27,9 @@
 #include "nespad.h"
 #include "wiipad.h"
 #include "FrensHelpers.h"
+// pico-bootLoader attract mode may start this application with a random game from here
+// (bootloader builds only, see pico_shared/attract.h).
+FRENS_ATTRACT_DIRS("/roms/TI99");
 #include "recentgames.h"
 #include "settings.h"
 #include "FrensFonts.h"
@@ -1346,6 +1349,27 @@ static inline void serialKeyboardTick(void)  { }
 // land in the same tms9901.Keyboard[] array. USB gamepads take a port each; a GPIO
 // NES/SNES pad or a Wii classic controller feeds whichever port has no USB pad.
 // -------------------------------------------------------------------------------------
+#if FRENS_ATTRACT_APP
+// Attract mode: a cartridge comes up on the master title screen, then the menu
+// ("2 FOR PARSEC"). START types a 2 (below), so press it twice, as a player
+// would: past the title screen, then the first entry the cartridge adds.
+static constexpr uint32_t ATTRACT_PRESS_TITLE = 150; // frames after the start
+static constexpr uint32_t ATTRACT_PRESS_MENU = 240;
+static constexpr uint32_t ATTRACT_PRESS_FRAMES = 10;
+
+static bool attractPressStart()
+{
+    static uint32_t frames = 0;
+    if (frames > ATTRACT_PRESS_MENU + ATTRACT_PRESS_FRAMES || !Frens::attractActive())
+        return false;
+    const uint32_t f = frames++;
+    if (f == ATTRACT_PRESS_TITLE || f == ATTRACT_PRESS_MENU)
+        printf("Attract mode: START (key 2) at frame %lu\n", (unsigned long)f);
+    return (f >= ATTRACT_PRESS_TITLE && f < ATTRACT_PRESS_TITLE + ATTRACT_PRESS_FRAMES) ||
+           (f >= ATTRACT_PRESS_MENU && f < ATTRACT_PRESS_MENU + ATTRACT_PRESS_FRAMES);
+}
+#endif
+
 static void update_ti_joysticks(void)
 {
     static constexpr int LEFT   = 1 << 6;
@@ -1435,6 +1459,10 @@ static void update_ti_joysticks(void)
 
             if ((v & START) && !(v & (SELECT | A | LEFT | RIGHT)))
                 tms9901.Keyboard[TMS_KEY_2] = 1;
+#if FRENS_ATTRACT_APP
+            if (attractPressStart())
+                tms9901.Keyboard[TMS_KEY_2] = 1;
+#endif
 
             // Reboot to BOOTSEL mode
             if ((v & (SELECT | START | UP | A)) == (SELECT | START | UP | A))
@@ -1678,6 +1706,11 @@ int main()
             // RomLister splits this list on spaces (see RomLister::IsextensionAllowed),
             // not commas, and compares case-insensitively.
             const char *romExtensions = ".rpk .bin .tib";
+#if FRENS_ATTRACT_APP
+            // Attract mode shows cartridges; TI BASIC alone has nothing to show.
+            if (Frens::attractActive())
+                romExtensions = ".rpk .bin";
+#endif
             menu("pico-994A", ErrorMessage, isFatalError, showSplash, romExtensions, selectedRom);
             printf("Selected: %s\n", selectedRom);
         }
