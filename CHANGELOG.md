@@ -26,6 +26,10 @@ out over HDMI or DVI, and a USB keyboard works as the TI keyboard.
 
 # Next release
 
+## What's new
+
+- **Attract mode.** pico-bootLoader's new attract mode can now start the emulator with a random cartridge from `/roms/TI99`. The cartridge starts by itself, past the console's title screen and menu. Press any button to play that game yourself.
+
 ## Changes
 
 - Built with Pico SDK 2.3.1. This leaves a little more memory free, about 0.4 KB.
